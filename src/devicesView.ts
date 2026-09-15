@@ -1,22 +1,106 @@
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
+import { abiLabel, androidVersion, apiLabel } from './avds';
+import { DevicePanel } from './devicePanel';
 import { Device, DeviceStore } from './deviceStore';
 
 export type DeviceAction =
   | 'run'
+  | 'stop'
+  | 'reveal'
+  | 'screenshot'
+  | 'delete'
   | 'coldBoot'
   | 'wipeData'
   | 'open'
-  | 'stop'
   | 'location'
   | 'extendedControls'
-  | 'screenshot'
   | 'copySerial'
-  | 'reveal'
   | 'editConfig'
-  | 'delete';
+  | 'showWindow'
+  | 'erase'
+  | 'setLocation'
+  | 'playRoute'
+  | 'clearLocation'
+  | 'toggleAppearance'
+  | 'openUrl'
+  | 'copyUdid'
+  | 'reboot'
+  | 'hideScreen';
 
-type ViewMessage = { type: 'ready' } | { type: 'action'; action: DeviceAction; avd: string };
+type ViewMessage = { type: 'ready' } | { type: 'action'; action: DeviceAction; id: string };
+
+function describe(device: Device, mirrored: Set<string>) {
+  const common = { id: device.id, platform: device.platform, status: device.status, physical: false, mirrored: false };
+  if (device.androidPhone) {
+    const phone = device.androidPhone;
+    const stateNote =
+      phone.state === 'unauthorized'
+        ? 'Unauthorized: allow USB debugging on the phone'
+        : phone.state !== 'device'
+          ? `State: ${phone.state}`
+          : undefined;
+    return {
+      ...common,
+      physical: true,
+      mirrored: mirrored.has(phone.serial),
+      displayName: phone.name,
+      subtitle: [androidVersion(phone.sdk) ?? phone.state, abiLabel(phone.abi)].filter(Boolean),
+      api: apiLabel(phone.sdk) ?? '',
+      type: 'Physical',
+      external: false,
+      controllable: false,
+      hasUi: false,
+      details: [stateNote, phone.model && `Model: ${phone.model}`, `Serial: ${phone.serial}`, `Connection: ${phone.connection}`].filter(Boolean),
+    };
+  }
+  if (device.iosPhone) {
+    const phone = device.iosPhone;
+    return {
+      ...common,
+      physical: true,
+      displayName: phone.name,
+      subtitle: [phone.osVersion && `iOS ${phone.osVersion}`, phone.model].filter(Boolean),
+      api: phone.osVersion ?? '',
+      type: 'Physical',
+      external: false,
+      controllable: false,
+      hasUi: false,
+      details: [phone.connected ? `Connected over ${phone.connection ?? 'USB'}` : 'Not connected', `UDID: ${phone.udid}`],
+    };
+  }
+  if (device.simulator) {
+    const simulator = device.simulator;
+    return {
+      ...common,
+      displayName: simulator.name,
+      subtitle: [simulator.runtime, simulator.family].filter(Boolean),
+      api: simulator.runtimeVersion,
+      type: 'Simulator',
+      external: false,
+      controllable: false,
+      hasUi: false,
+      details: [`UDID: ${simulator.udid}`],
+    };
+  }
+  const avd = device.avd!;
+  return {
+    ...common,
+    displayName: avd.displayName,
+    subtitle: [avd.androidVersion, avd.abi].filter(Boolean),
+    api: avd.apiLabel ?? '',
+    type: 'Virtual',
+    external: device.external,
+    controllable: !!device.emulator,
+    hasUi: !!device.emulator?.hasUi,
+    details: [
+      avd.device && `Device: ${avd.device}`,
+      avd.image && `Image: ${avd.image}`,
+      avd.resolution && `Screen: ${avd.resolution}`,
+      device.serial && `Serial: ${device.serial}`,
+    ].filter(Boolean),
+  };
+}
 
 export class DevicesViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'emulatorPanel.devices';
@@ -28,6 +112,7 @@ export class DevicesViewProvider implements vscode.WebviewViewProvider {
     private readonly onAction: (action: DeviceAction, device: Device) => void,
   ) {
     store.onDidChange((devices) => this.post(devices));
+    DevicePanel.onDidChangeSessions(() => this.post(this.store.current));
   }
 
   get visible(): boolean {
@@ -43,7 +128,7 @@ export class DevicesViewProvider implements vscode.WebviewViewProvider {
         this.post(this.store.current);
         void this.store.refresh();
       } else if (message.type === 'action') {
-        const device = this.store.find(message.avd);
+        const device = this.store.find(message.id);
         if (device) {
           this.onAction(message.action, device);
         }
@@ -60,24 +145,11 @@ export class DevicesViewProvider implements vscode.WebviewViewProvider {
   }
 
   private post(devices: Device[]): void {
-    void this.view?.webview.postMessage({
-      type: 'devices',
-      devices: devices.map(({ avd, status, emulator, serial, external }) => ({
-        name: avd.name,
-        displayName: avd.displayName,
-        api: avd.apiLabel ?? '',
-        androidVersion: avd.androidVersion ?? '',
-        abi: avd.abi ?? '',
-        device: avd.device ?? '',
-        image: avd.image ?? '',
-        resolution: avd.resolution ?? '',
-        serial: serial ?? '',
-        status,
-        external,
-        controllable: !!emulator,
-        hasUi: !!emulator?.hasUi,
-      })),
-    });
+    if (!this.view) {
+      return;
+    }
+    const mirrored = DevicePanel.mirroredSerials();
+    void this.view.webview.postMessage({ type: 'devices', devices: devices.map((device) => describe(device, mirrored)) });
   }
 
   private html(webview: vscode.Webview): string {

@@ -3,15 +3,42 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { avdHome, readAvds } from './avds';
-import { DevicePanel } from './devicePanel';
+import { AvdInfo, avdHome, readAvds } from './avds';
+import { DevicePanel, PanelEnvironment, SavedPanelState } from './devicePanel';
 import { Device, DeviceStore } from './deviceStore';
 import { DeviceAction, DevicesViewProvider } from './devicesView';
 import { RunningEmulator, listRunning } from './discovery';
 import { EmulatorClient, Pane } from './emulatorClient';
 import { launchAvd } from './launcher';
+import { pickAndPlayRoute, pickLocation } from './locationPicker';
 import { log } from './log';
+import {
+  AndroidPhone,
+  IosPhone,
+  androidNightMode,
+  androidOpenUrl,
+  androidScreenshot,
+  listAdbEntries,
+  listAndroidPhones,
+  rebootAndroid,
+  setAndroidNightMode,
+} from './physicalDevices';
+import { SCRCPY_SERVER_FILE, ScrcpyConnection, ScrcpyRecord } from './scrcpy';
 import { adbPath, protoDir } from './sdk';
+import {
+  SimulatorInfo,
+  bootSimulator,
+  clearLocation,
+  deleteSimulator,
+  eraseSimulator,
+  getAppearance,
+  openUrl,
+  screenshotSimulator,
+  setAppearance,
+  setLocation,
+  showSimulatorWindow,
+  shutdownSimulator,
+} from './simulators';
 
 const PANE_COMMANDS: Record<string, Pane> = {
   'emulatorPanel.extendedControls': 'KEEP_CURRENT',
@@ -37,6 +64,12 @@ const KEY_COMMANDS: Record<string, string> = {
   'emulatorPanel.volumeDown': 'AudioVolumeDown',
 };
 
+const LAST_URL = 'emulatorPanel.lastSimulatorUrl';
+const PANEL_STATE = 'emulatorPanel.runningDevicesState';
+const SCRCPY_SESSIONS = 'emulatorPanel.scrcpySessions';
+
+let shuttingDown = false;
+
 function showError(error: unknown): void {
   if (!(error instanceof vscode.CancellationError)) {
     vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
@@ -45,6 +78,8 @@ function showError(error: unknown): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(log);
+  void ScrcpyConnection.cleanup(context.workspaceState.get<ScrcpyRecord[]>(SCRCPY_SESSIONS, []));
+  ScrcpyConnection.onRecordsChanged = (records) => void context.workspaceState.update(SCRCPY_SESSIONS, records);
   let devicesView: DevicesViewProvider | undefined;
   const store = new DeviceStore(() => !!devicesView?.visible || !!DevicePanel.current);
   context.subscriptions.push(store);
@@ -69,6 +104,40 @@ export function activate(context: vscode.ExtensionContext): void {
     return panel;
   };
 
+  const environment = (): PanelEnvironment => ({
+    extensionUri: context.extensionUri,
+    protoDir: protoDir(),
+    serverPath: vscode.Uri.joinPath(context.extensionUri, 'media', 'vendor', SCRCPY_SERVER_FILE).fsPath,
+  });
+
+  const connectedPhones = (): AndroidPhone[] =>
+    store.current.flatMap((device) => (device.androidPhone?.state === 'device' ? [device.androidPhone] : []));
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(DevicePanel.viewType, {
+      deserializeWebviewPanel: async (panel) => {
+        try {
+          const phones = await listAndroidPhones(await listAdbEntries().catch(() => [])).catch(() => [] as AndroidPhone[]);
+          DevicePanel.revive(
+            panel,
+            environment(),
+            context.workspaceState.get<SavedPanelState>(PANEL_STATE),
+            listRunning(),
+            phones.filter((phone) => phone.state === 'device'),
+          );
+        } catch (error) {
+          panel.dispose();
+          showError(error);
+        }
+      },
+    }),
+    DevicePanel.onDidChangeSessions(() => {
+      if (!shuttingDown) {
+        void context.workspaceState.update(PANEL_STATE, DevicePanel.savedState());
+      }
+    }),
+  );
+
   const launch = async (avdName: string, launchArgs: string[] = []): Promise<void> => {
     store.markStarting(avdName);
     let emulator: RunningEmulator;
@@ -82,7 +151,7 @@ export function activate(context: vscode.ExtensionContext): void {
       throw error;
     }
     void store.refresh();
-    DevicePanel.show(context.extensionUri, emulator, protoDir());
+    DevicePanel.show(environment(), emulator);
   };
 
   const stop = async (avdName: string, serial: string | undefined): Promise<void> => {
@@ -100,8 +169,77 @@ export function activate(context: vscode.ExtensionContext): void {
 
   DevicePanel.stopEmulator = (emulator) => stop(emulator.avdName, `emulator-${emulator.consolePort}`);
 
-  const handleDeviceAction = async (action: DeviceAction, device: Device): Promise<void> => {
-    const { avd, emulator, serial, status } = device;
+  const askUrl = async (deviceName: string): Promise<string | undefined> => {
+    const url = await vscode.window.showInputBox({
+      title: `Open URL on ${deviceName}`,
+      prompt: 'A web address or deep link',
+      placeHolder: 'https://example.com or myapp://screen',
+      value: context.globalState.get<string>(LAST_URL),
+      ignoreFocusOut: true,
+    });
+    if (url) {
+      await context.globalState.update(LAST_URL, url);
+    }
+    return url;
+  };
+
+  const handleAndroidPhoneAction = async (action: DeviceAction, phone: AndroidPhone): Promise<void> => {
+    const requireConnected = () => {
+      if (phone.state !== 'device') {
+        throw new Error(
+          phone.state === 'unauthorized' ? `Allow USB debugging on ${phone.name} first.` : `${phone.name} is ${phone.state}.`,
+        );
+      }
+    };
+    switch (action) {
+      case 'open':
+        requireConnected();
+        DevicePanel.showPhone(environment(), phone);
+        return;
+      case 'hideScreen':
+        DevicePanel.closePhone(phone.serial);
+        return;
+      case 'screenshot':
+        requireConnected();
+        await saveScreenshot(await androidScreenshot(phone.serial));
+        return;
+      case 'openUrl': {
+        requireConnected();
+        const url = await askUrl(phone.name);
+        if (url) {
+          await androidOpenUrl(phone.serial, url);
+        }
+        return;
+      }
+      case 'toggleAppearance':
+        requireConnected();
+        await setAndroidNightMode(phone.serial, !(await androidNightMode(phone.serial)));
+        return;
+      case 'copySerial':
+        await vscode.env.clipboard.writeText(phone.serial);
+        vscode.window.showInformationMessage(`Copied ${phone.serial} to the clipboard.`);
+        return;
+      case 'reboot': {
+        requireConnected();
+        const choice = await vscode.window.showWarningMessage(`Reboot ${phone.name}?`, { modal: true }, 'Reboot');
+        if (choice) {
+          await rebootAndroid(phone.serial);
+          void store.refresh();
+        }
+        return;
+      }
+    }
+  };
+
+  const handleIosPhoneAction = async (action: DeviceAction, phone: IosPhone): Promise<void> => {
+    if (action === 'copyUdid') {
+      await vscode.env.clipboard.writeText(phone.udid);
+      vscode.window.showInformationMessage(`Copied the UDID of ${phone.name} to the clipboard.`);
+    }
+  };
+
+  const handleAndroidAction = async (action: DeviceAction, device: Device, avd: AvdInfo): Promise<void> => {
+    const { emulator, serial, status } = device;
     const controllable = (): RunningEmulator => {
       if (!emulator) {
         throw new Error(`${avd.displayName} was not started by Emulator Panel. Stop it and run it from the Device Manager.`);
@@ -121,7 +259,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (status === 'stopped') {
           await launch(avd.name);
         } else if (emulator) {
-          DevicePanel.show(context.extensionUri, emulator, protoDir());
+          DevicePanel.show(environment(), emulator);
         }
         return;
       case 'coldBoot':
@@ -139,7 +277,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       case 'open':
-        DevicePanel.show(context.extensionUri, controllable(), protoDir());
+        DevicePanel.show(environment(), controllable());
         return;
       case 'stop':
         await stop(avd.name, serial);
@@ -185,18 +323,143 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const handleSimulatorAction = async (action: DeviceAction, device: Device, simulator: SimulatorInfo): Promise<void> => {
+    const { udid, name } = simulator;
+    const requireRunning = () => {
+      if (device.status !== 'running') {
+        throw new Error(`${name} is not running. Run it first.`);
+      }
+    };
+    const requireStopped = (verb: string) => {
+      if (device.status !== 'stopped') {
+        throw new Error(`Stop ${name} before ${verb} it.`);
+      }
+    };
+
+    switch (action) {
+      case 'run':
+        if (device.status !== 'stopped') {
+          await showSimulatorWindow(udid);
+          return;
+        }
+        store.markStarting(device.id);
+        try {
+          await bootSimulator(udid);
+        } catch (error) {
+          store.clearTransition(device.id);
+          throw error;
+        }
+        return;
+      case 'showWindow':
+        await showSimulatorWindow(udid);
+        return;
+      case 'stop':
+        store.markStopping(device.id);
+        try {
+          await shutdownSimulator(udid);
+        } catch (error) {
+          store.clearTransition(device.id);
+          throw error;
+        }
+        return;
+      case 'erase': {
+        requireStopped('erasing');
+        const choice = await vscode.window.showWarningMessage(
+          `Erase ${name}?`,
+          { modal: true, detail: 'All apps, data and settings on this simulator are erased.' },
+          'Erase',
+        );
+        if (choice) {
+          await eraseSimulator(udid);
+          vscode.window.showInformationMessage(`${name} was erased.`);
+        }
+        return;
+      }
+      case 'delete': {
+        requireStopped('deleting');
+        const choice = await vscode.window.showWarningMessage(
+          `Delete ${name}?`,
+          { modal: true, detail: 'The simulator and all of its data are permanently deleted.' },
+          'Delete',
+        );
+        if (choice) {
+          await deleteSimulator(udid);
+          void store.refresh();
+        }
+        return;
+      }
+      case 'reveal':
+        await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.dirname(simulator.dataPath)));
+        return;
+      case 'setLocation': {
+        requireRunning();
+        const point = await pickLocation(context.globalState, name);
+        if (point) {
+          await setLocation(udid, point);
+          vscode.window.showInformationMessage(`${name} location set to ${point.name ?? `${point.lat}, ${point.lon}`}.`);
+        }
+        return;
+      }
+      case 'playRoute':
+        requireRunning();
+        await pickAndPlayRoute(context.globalState, udid, name);
+        return;
+      case 'clearLocation':
+        requireRunning();
+        await clearLocation(udid);
+        vscode.window.showInformationMessage(`Location simulation stopped on ${name}.`);
+        return;
+      case 'toggleAppearance': {
+        requireRunning();
+        const next = (await getAppearance(udid)) === 'dark' ? 'light' : 'dark';
+        await setAppearance(udid, next);
+        return;
+      }
+      case 'openUrl': {
+        requireRunning();
+        const url = await askUrl(name);
+        if (url) {
+          await openUrl(udid, url);
+        }
+        return;
+      }
+      case 'screenshot':
+        requireRunning();
+        await saveScreenshot(await screenshotSimulator(udid));
+        return;
+      case 'copyUdid':
+        await vscode.env.clipboard.writeText(udid);
+        vscode.window.showInformationMessage(`Copied the UDID of ${name} to the clipboard.`);
+        return;
+    }
+  };
+
+  const handleDeviceAction = async (action: DeviceAction, device: Device): Promise<void> => {
+    if (device.androidPhone) {
+      await handleAndroidPhoneAction(action, device.androidPhone);
+    } else if (device.iosPhone) {
+      await handleIosPhoneAction(action, device.iosPhone);
+    } else if (device.simulator) {
+      await handleSimulatorAction(action, device, device.simulator);
+    } else if (device.avd) {
+      await handleAndroidAction(action, device, device.avd);
+    }
+  };
+
   devicesView = new DevicesViewProvider(context.extensionUri, store, (action, device) => {
     handleDeviceAction(action, device).catch(showError);
   });
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(DevicesViewProvider.viewType, devicesView));
 
-  register('emulatorPanel.open', (avdName) => openDevice(context, launch, typeof avdName === 'string' ? avdName : undefined));
+  register('emulatorPanel.open', (name) => openDevice(environment, launch, connectedPhones(), typeof name === 'string' ? name : undefined));
   register('emulatorPanel.stop', async () => {
-    const emulator = activePanel().focusedEmulator;
-    if (!emulator) {
-      throw new Error('No device is open in Running Devices.');
+    const panel = activePanel();
+    const emulator = panel.focusedEmulator;
+    if (emulator) {
+      await stop(emulator.avdName, `emulator-${emulator.consolePort}`);
+    } else {
+      panel.closeFocused();
     }
-    await stop(emulator.avdName, `emulator-${emulator.consolePort}`);
   });
   register('emulatorPanel.rotateLeft', () => activePanel().rotate(1));
   register('emulatorPanel.rotateRight', () => activePanel().rotate(-1));
@@ -213,7 +476,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (DevicePanel.reveal()) {
       return;
     }
-    if (!DevicePanel.restore(context.extensionUri, listRunning(), protoDir())) {
+    if (!DevicePanel.restore(environment(), listRunning(), connectedPhones())) {
       await vscode.commands.executeCommand('emulatorPanel.open');
     }
   };
@@ -226,7 +489,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     await DevicePanel.moveToNewWindow();
   });
-  register('emulatorPanel.moveToMainWindow', () => DevicePanel.moveToMainWindow(context.extensionUri, listRunning(), protoDir()));
+  register('emulatorPanel.moveToMainWindow', () => DevicePanel.moveToMainWindow(environment(), listRunning(), connectedPhones()));
   register('emulatorPanel.toggleAlwaysOnTop', () => DevicePanel.current?.toggleAlwaysOnTop());
 
   register('emulatorPanel.refreshDevices', () => store.refresh());
@@ -234,23 +497,27 @@ export function activate(context: vscode.ExtensionContext): void {
   register('emulatorPanel.showLog', () => log.show());
   register('emulatorPanel.openAvdFolder', () => vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(avdHome())));
   register('emulatorPanel.stopAll', async () => {
-    const running = store.current.filter((device) => device.serial && device.status === 'running');
+    const running = store.current.filter((device) => device.status === 'running' && !device.androidPhone && !device.iosPhone);
     if (running.length === 0) {
-      vscode.window.showInformationMessage('No emulators are running.');
+      vscode.window.showInformationMessage('No emulators or simulators are running.');
       return;
     }
-    await Promise.all(running.map((device) => stop(device.avd.name, device.serial)));
+    await Promise.all(running.map((device) => handleDeviceAction('stop', device)));
   });
 }
 
-export function deactivate(): void {}
+export function deactivate(): void {
+  shuttingDown = true;
+  ScrcpyConnection.closeAllSync();
+}
 
 async function openDevice(
-  context: vscode.ExtensionContext,
+  environment: () => PanelEnvironment,
   launch: (avdName: string) => Promise<void>,
-  avdName?: string,
+  phones: AndroidPhone[],
+  name?: string,
 ): Promise<void> {
-  type Item = vscode.QuickPickItem & { emulator?: RunningEmulator; avd?: string };
+  type Item = vscode.QuickPickItem & { emulator?: RunningEmulator; avd?: string; phone?: AndroidPhone };
   const running = listRunning();
   const items: Item[] = [
     ...running.map((emulator) => ({
@@ -258,25 +525,34 @@ async function openDevice(
       description: emulator.hasUi ? 'running' : 'running without emulator UI (no extended controls)',
       emulator,
     })),
+    ...phones.map((phone) => ({
+      label: `$(device-mobile) ${phone.name}`,
+      description: `physical device · ${phone.connection}`,
+      phone,
+    })),
     ...readAvds()
       .filter((avd) => !running.some((emulator) => emulator.avdName === avd.name))
       .sort((a, b) => a.displayName.localeCompare(b.displayName))
       .map((avd) => ({ label: `$(play) ${avd.name}`, description: 'start', avd: avd.name })),
   ];
   if (items.length === 0) {
-    throw new Error("No AVDs found. Create one in Android Studio's Device Manager.");
+    throw new Error("No devices found. Create an AVD in Android Studio's Device Manager or connect a phone.");
   }
-  const picked = avdName
-    ? items.find((item) => (item.emulator?.avdName ?? item.avd) === avdName)
-    : await vscode.window.showQuickPick(items, { placeHolder: 'Add a running emulator or start an AVD' });
+  const picked = name
+    ? items.find(
+        (item) => item.emulator?.avdName === name || item.avd === name || item.phone?.serial === name || item.phone?.name === name,
+      )
+    : await vscode.window.showQuickPick(items, { placeHolder: 'Add a running device or start an AVD' });
   if (!picked) {
-    if (avdName) {
-      throw new Error(`No AVD named "${avdName}" was found.`);
+    if (name) {
+      throw new Error(`No device named "${name}" was found.`);
     }
     return;
   }
   if (picked.emulator) {
-    DevicePanel.show(context.extensionUri, picked.emulator, protoDir());
+    DevicePanel.show(environment(), picked.emulator);
+  } else if (picked.phone) {
+    DevicePanel.showPhone(environment(), picked.phone);
   } else if (picked.avd) {
     await launch(picked.avd);
   }

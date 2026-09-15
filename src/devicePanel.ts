@@ -3,6 +3,8 @@ import * as vscode from 'vscode';
 import { RunningEmulator } from './discovery';
 import { EmulatorClient, Frame, KeyEventType, Pane, Rotation } from './emulatorClient';
 import { log } from './log';
+import { AndroidPhone, androidScreenshot } from './physicalDevices';
+import { ScrcpyConnection } from './scrcpy';
 
 const ROTATION_QUADRANT: Record<Rotation, number> = {
   PORTRAIT: 0,
@@ -10,6 +12,34 @@ const ROTATION_QUADRANT: Record<Rotation, number> = {
   REVERSE_PORTRAIT: 2,
   REVERSE_LANDSCAPE: 3,
 };
+
+const ANDROID_KEYCODES: Record<string, number> = {
+  GoBack: 4,
+  GoHome: 3,
+  AppSwitch: 187,
+  Power: 26,
+  AudioVolumeUp: 24,
+  AudioVolumeDown: 25,
+};
+
+const TYPED_KEYCODES: Record<string, number> = {
+  Enter: 66,
+  Backspace: 67,
+  Delete: 112,
+  Tab: 61,
+  Escape: 111,
+  ArrowUp: 19,
+  ArrowDown: 20,
+  ArrowLeft: 21,
+  ArrowRight: 22,
+  Home: 122,
+  End: 123,
+  PageUp: 92,
+  PageDown: 93,
+};
+
+const PHONE_MAX_SIZE = 1920;
+const MIN_NEIGHBOR_WIDTH = 220;
 
 const mac = process.platform === 'darwin';
 
@@ -27,6 +57,7 @@ interface Tool {
   keys?: string;
   svg: string;
   needsUi?: boolean;
+  collapse?: number;
 }
 
 const TOOL_GROUPS: Tool[][] = [
@@ -36,17 +67,17 @@ const TOOL_GROUPS: Tool[][] = [
     { command: 'emulatorPanel.overview', title: 'Overview', keys: 'mod+o', svg: icon('<rect x="6" y="6" width="12" height="12" rx="1.5"/>') },
   ],
   [
-    { command: 'emulatorPanel.volumeDown', title: 'Volume down', keys: 'mod+-', svg: icon('<path d="M4 9h3l5-4v14l-5-4H4z"/><path d="M16 12h5"/>') },
-    { command: 'emulatorPanel.volumeUp', title: 'Volume up', keys: 'mod+=', svg: icon('<path d="M4 9h3l5-4v14l-5-4H4z"/><path d="M16 12h5M18.5 9.5v5"/>') },
+    { command: 'emulatorPanel.volumeDown', title: 'Volume down', keys: 'mod+-', collapse: 2, svg: icon('<path d="M4 9h3l5-4v14l-5-4H4z"/><path d="M16 12h5"/>') },
+    { command: 'emulatorPanel.volumeUp', title: 'Volume up', keys: 'mod+=', collapse: 2, svg: icon('<path d="M4 9h3l5-4v14l-5-4H4z"/><path d="M16 12h5M18.5 9.5v5"/>') },
     { command: 'emulatorPanel.power', title: 'Power', keys: 'mod+p', svg: icon('<path d="M12 3v8"/><path d="M7.05 6.05a7 7 0 1 0 9.9 0"/>') },
   ],
   [
-    { command: 'emulatorPanel.rotateLeft', title: 'Rotate left', keys: 'mod+left', svg: icon('<path d="M4.5 13a7.5 7.5 0 1 0 2.2-6.3"/><path d="M4 4v5h5"/>') },
-    { command: 'emulatorPanel.rotateRight', title: 'Rotate right', keys: 'mod+right', svg: icon('<path d="M19.5 13a7.5 7.5 0 1 1-2.2-6.3"/><path d="M20 4v5h-5"/>') },
-    { command: 'emulatorPanel.screenshot', title: 'Take screenshot', keys: 'mod+s', svg: icon('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/>') },
+    { command: 'emulatorPanel.rotateLeft', title: 'Rotate left', keys: 'mod+left', collapse: 1, svg: icon('<path d="M4.5 13a7.5 7.5 0 1 0 2.2-6.3"/><path d="M4 4v5h5"/>') },
+    { command: 'emulatorPanel.rotateRight', title: 'Rotate right', keys: 'mod+right', collapse: 1, svg: icon('<path d="M19.5 13a7.5 7.5 0 1 1-2.2-6.3"/><path d="M20 4v5h-5"/>') },
+    { command: 'emulatorPanel.screenshot', title: 'Take screenshot', keys: 'mod+s', collapse: 4, svg: icon('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/>') },
   ],
   [
-    { command: 'emulatorPanel.location', title: 'Location', keys: 'mod+shift+l', needsUi: true, svg: icon('<path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/>') },
+    { command: 'emulatorPanel.location', title: 'Location', keys: 'mod+shift+l', needsUi: true, collapse: 3, svg: icon('<path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/>') },
     {
       command: 'emulatorPanel.extendedControls',
       title: 'Extended controls',
@@ -63,9 +94,29 @@ interface EditorGroupLayout {
   groups: { size?: number; groups?: unknown[] }[];
 }
 
-const MIN_NEIGHBOR_WIDTH = 220;
+export interface PanelEnvironment {
+  extensionUri: vscode.Uri;
+  protoDir: string;
+  serverPath: string;
+}
 
-interface Session {
+export interface SavedPanelState {
+  devices: string[];
+  focused?: string;
+  separateWindow?: boolean;
+}
+
+interface SessionBase {
+  readonly id: number;
+  readonly name: string;
+  readonly hasUi: boolean;
+  box: { width: number; height: number };
+  restartTimer?: NodeJS.Timeout;
+  stopping?: boolean;
+}
+
+interface EmulatorSession extends SessionBase {
+  readonly kind: 'emulator';
   readonly emulator: RunningEmulator;
   readonly client: EmulatorClient;
   displaySize?: { width: number; height: number };
@@ -73,28 +124,16 @@ interface Session {
   stopStream?: () => void;
   awaitingDraw: boolean;
   pendingFrame?: Frame;
-  box: { width: number; height: number };
-  restartTimer?: NodeJS.Timeout;
-  stopping?: boolean;
 }
 
-type WebviewMessage =
-  | { type: 'ready' }
-  | { type: 'panelAction'; action: PanelAction }
-  | { type: 'close'; id: number }
-  | { type: 'focus'; id: number }
-  | { type: 'command'; id: number; command: string }
-  | { type: 'layout'; reason: 'devices' | 'aspect' | 'request'; width: number; needed: number }
-  | { type: 'resize'; id: number; width: number; height: number; dpr: number }
-  | { type: 'drawn'; id: number }
-  | { type: 'pointer'; id: number; phase: 'down' | 'move' | 'up'; pointer: number; u: number; v: number }
-  | { type: 'wheel'; id: number; u: number; v: number; dx: number; dy: number }
-  | { type: 'key'; id: number; key: string; eventType: KeyEventType };
+interface PhoneSession extends SessionBase {
+  readonly kind: 'phone';
+  readonly phone: AndroidPhone;
+  readonly connection: ScrcpyConnection;
+  forwarding: boolean;
+}
 
-const fitEnabled = () => vscode.workspace.getConfiguration('emulatorPanel').get<boolean>('fitColumnOnOpen', true);
-const stopOnClose = () => vscode.workspace.getConfiguration('emulatorPanel').get<boolean>('stopOnClose', true);
-const compactWindow = () => vscode.workspace.getConfiguration('emulatorPanel').get<boolean>('compactWindow', true);
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+type Session = EmulatorSession | PhoneSession;
 
 type PanelAction = 'add' | 'newWindow' | 'mainWindow' | 'onTop';
 
@@ -105,15 +144,105 @@ const PANEL_ACTION_COMMANDS: Record<PanelAction, string> = {
   onTop: 'emulatorPanel.toggleAlwaysOnTop',
 };
 
+type WebviewMessage =
+  | { type: 'ready' }
+  | { type: 'panelAction'; action: PanelAction }
+  | { type: 'close'; id: number }
+  | { type: 'focus'; id: number }
+  | { type: 'command'; id: number; command: string }
+  | { type: 'layout'; reason: 'devices' | 'aspect' | 'request'; width: number; needed: number }
+  | { type: 'resize'; id: number; width: number; height: number; dpr: number }
+  | { type: 'drawn'; id: number }
+  | { type: 'videoError'; id: number }
+  | { type: 'videoStarted'; id: number; width: number; height: number }
+  | { type: 'pointer'; id: number; phase: 'down' | 'move' | 'up'; pointer: number; u: number; v: number }
+  | { type: 'wheel'; id: number; u: number; v: number; dx: number; dy: number }
+  | { type: 'key'; id: number; key: string; eventType: KeyEventType };
+
+const settings = () => vscode.workspace.getConfiguration('emulatorPanel');
+const fitEnabled = () => settings().get<boolean>('fitColumnOnOpen', true);
+const stopOnClose = () => settings().get<boolean>('stopOnClose', true);
+const compactWindow = () => settings().get<boolean>('compactWindow', true);
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const clamp01 = (value: number) => Math.min(Math.max(value, 0), 1);
+
 export class DevicePanel {
   static readonly viewType = 'emulatorPanel.device';
   static stopEmulator: ((emulator: RunningEmulator) => Promise<void>) | undefined;
   private static instance: DevicePanel | undefined;
-  private static hiddenPids: number[] = [];
+  private static hiddenIds: number[] = [];
   private static hiddenFocus: number | undefined;
+  private static readonly phoneIds = new Map<string, number>();
+  private static readonly sessionsChanged = new vscode.EventEmitter<void>();
+  static readonly onDidChangeSessions = DevicePanel.sessionsChanged.event;
 
   static get current(): DevicePanel | undefined {
     return DevicePanel.instance;
+  }
+
+  static mirroredSerials(): Set<string> {
+    const sessions = DevicePanel.instance ? [...DevicePanel.instance.sessions.values()] : [];
+    return new Set(sessions.flatMap((session) => (session.kind === 'phone' ? [session.phone.serial] : [])));
+  }
+
+  static closePhone(serial: string): void {
+    const id = DevicePanel.phoneIds.get(serial);
+    if (id !== undefined) {
+      DevicePanel.instance?.removeSession(id);
+    }
+  }
+
+  static savedState(): SavedPanelState | undefined {
+    const devicePanel = DevicePanel.instance;
+    if (!devicePanel || devicePanel.sessions.size === 0) {
+      return undefined;
+    }
+    const focused = devicePanel.focusedSession();
+    return {
+      devices: [...devicePanel.sessions.values()].map((session) => DevicePanel.sessionKey(session)),
+      focused: focused && DevicePanel.sessionKey(focused),
+      separateWindow: devicePanel.separateWindow,
+    };
+  }
+
+  static revive(
+    panel: vscode.WebviewPanel,
+    environment: PanelEnvironment,
+    state: SavedPanelState | undefined,
+    running: RunningEmulator[],
+    phones: AndroidPhone[],
+  ): void {
+    if (DevicePanel.instance) {
+      panel.dispose();
+      return;
+    }
+    const devicePanel = new DevicePanel(panel, environment);
+    DevicePanel.instance = devicePanel;
+    devicePanel.separateWindow = !!state?.separateWindow;
+    for (const key of state?.devices ?? []) {
+      const separator = key.indexOf(':');
+      const kind = key.slice(0, separator);
+      const value = key.slice(separator + 1);
+      const emulator = kind === 'emulator' ? running.find((candidate) => candidate.avdName === value) : undefined;
+      const phone = kind === 'phone' ? phones.find((candidate) => candidate.serial === value) : undefined;
+      if (emulator) {
+        devicePanel.addEmulator(emulator, false);
+      } else if (phone) {
+        devicePanel.addPhone(phone, false);
+      }
+    }
+    if (devicePanel.sessions.size === 0) {
+      panel.dispose();
+      return;
+    }
+    const focused = [...devicePanel.sessions.values()].find((session) => DevicePanel.sessionKey(session) === state?.focused);
+    devicePanel.focus(focused?.id);
+    DevicePanel.updateVisibilityContext();
+    log.appendLine(`Restored Running Devices: ${[...devicePanel.sessions.values()].map((session) => session.name).join(', ')}`);
+  }
+
+  private static sessionKey(session: Session): string {
+    return session.kind === 'phone' ? `phone:${session.phone.serial}` : `emulator:${session.emulator.avdName}`;
   }
 
   static get isVisible(): boolean {
@@ -122,6 +251,23 @@ export class DevicePanel {
 
   static get inSeparateWindow(): boolean {
     return !!DevicePanel.instance?.separateWindow;
+  }
+
+  private static phoneId(serial: string): number {
+    let id = DevicePanel.phoneIds.get(serial);
+    if (id === undefined) {
+      id = -(DevicePanel.phoneIds.size + 1);
+      DevicePanel.phoneIds.set(serial, id);
+    }
+    return id;
+  }
+
+  static show(environment: PanelEnvironment, emulator: RunningEmulator): void {
+    DevicePanel.ensure(environment, emulator.avdName).addEmulator(emulator);
+  }
+
+  static showPhone(environment: PanelEnvironment, phone: AndroidPhone): void {
+    DevicePanel.ensure(environment, phone.name).addPhone(phone);
   }
 
   static async moveToNewWindow(): Promise<void> {
@@ -144,14 +290,14 @@ export class DevicePanel {
     }
   }
 
-  static async moveToMainWindow(extensionUri: vscode.Uri, running: RunningEmulator[], protoDir: string): Promise<void> {
+  static async moveToMainWindow(environment: PanelEnvironment, running: RunningEmulator[], phones: AndroidPhone[]): Promise<void> {
     if (!DevicePanel.instance) {
       return;
     }
     DevicePanel.hide();
     await vscode.commands.executeCommand('workbench.action.switchToMainWindow');
     await delay(150);
-    DevicePanel.restore(extensionUri, running, protoDir);
+    DevicePanel.restore(environment, running, phones);
   }
 
   static hide(): void {
@@ -159,7 +305,7 @@ export class DevicePanel {
     if (!devicePanel) {
       return;
     }
-    DevicePanel.hiddenPids = [...devicePanel.sessions.keys()];
+    DevicePanel.hiddenIds = [...devicePanel.sessions.keys()];
     DevicePanel.hiddenFocus = devicePanel.focusedId;
     devicePanel.keepEmulatorsRunning = true;
     devicePanel.panel.dispose();
@@ -174,45 +320,51 @@ export class DevicePanel {
     return true;
   }
 
-  static restore(extensionUri: vscode.Uri, running: RunningEmulator[], protoDir: string): boolean {
-    const byPid = new Map(running.map((emulator) => [emulator.pid, emulator]));
-    const previous = DevicePanel.hiddenPids
-      .map((pid) => byPid.get(pid))
-      .filter((emulator): emulator is RunningEmulator => !!emulator);
-    const emulators = previous.length > 0 ? previous : running;
-    if (emulators.length === 0) {
+  static restore(environment: PanelEnvironment, running: RunningEmulator[], phones: AndroidPhone[]): boolean {
+    const emulators = new Map(running.map((emulator) => [emulator.pid, emulator]));
+    const phonesById = new Map(phones.map((phone) => [DevicePanel.phoneId(phone.serial), phone]));
+    const previous = DevicePanel.hiddenIds.filter((id) => emulators.has(id) || phonesById.has(id));
+    const ids = previous.length > 0 ? previous : running.map((emulator) => emulator.pid);
+    if (ids.length === 0) {
       return false;
     }
-    for (const emulator of emulators) {
-      DevicePanel.show(extensionUri, emulator, protoDir);
+    const focus = DevicePanel.hiddenFocus;
+    for (const id of ids) {
+      const emulator = emulators.get(id);
+      const phone = phonesById.get(id);
+      if (emulator) {
+        DevicePanel.show(environment, emulator);
+      } else if (phone) {
+        DevicePanel.showPhone(environment, phone);
+      }
     }
-    DevicePanel.instance?.focus(DevicePanel.hiddenFocus);
+    DevicePanel.instance?.focus(focus);
     return true;
+  }
+
+  private static ensure(environment: PanelEnvironment, title: string): DevicePanel {
+    const existing = DevicePanel.instance;
+    if (existing) {
+      existing.panel.reveal(undefined, false);
+      return existing;
+    }
+    const openIn = settings().get<string>('openIn');
+    const panel = vscode.window.createWebviewPanel(
+      DevicePanel.viewType,
+      title,
+      { viewColumn: openIn === 'active' ? vscode.ViewColumn.Active : vscode.ViewColumn.Beside, preserveFocus: false },
+      { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(environment.extensionUri, 'media')] },
+    );
+    const devicePanel = new DevicePanel(panel, environment);
+    DevicePanel.instance = devicePanel;
+    DevicePanel.hiddenIds = [];
+    DevicePanel.updateVisibilityContext();
+    return devicePanel;
   }
 
   private static updateVisibilityContext(): void {
     void vscode.commands.executeCommand('setContext', 'emulatorPanel.runningDevicesVisible', DevicePanel.isVisible);
     void vscode.commands.executeCommand('setContext', 'emulatorPanel.runningDevicesInWindow', DevicePanel.inSeparateWindow);
-  }
-
-  static show(extensionUri: vscode.Uri, emulator: RunningEmulator, protoDir: string): void {
-    let devicePanel = DevicePanel.instance;
-    if (devicePanel) {
-      devicePanel.panel.reveal(undefined, false);
-    } else {
-      const openIn = vscode.workspace.getConfiguration('emulatorPanel').get<string>('openIn');
-      const panel = vscode.window.createWebviewPanel(
-        DevicePanel.viewType,
-        emulator.avdName,
-        { viewColumn: openIn === 'active' ? vscode.ViewColumn.Active : vscode.ViewColumn.Beside, preserveFocus: false },
-        { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')] },
-      );
-      devicePanel = new DevicePanel(panel, extensionUri, protoDir);
-      DevicePanel.instance = devicePanel;
-      DevicePanel.hiddenPids = [];
-      DevicePanel.updateVisibilityContext();
-    }
-    devicePanel.addSession(emulator);
   }
 
   private readonly sessions = new Map<number, Session>();
@@ -226,26 +378,26 @@ export class DevicePanel {
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
-    private readonly extensionUri: vscode.Uri,
-    private readonly protoDir: string,
+    private readonly environment: PanelEnvironment,
   ) {
     panel.iconPath = {
-      light: vscode.Uri.joinPath(extensionUri, 'media', 'device-light.svg'),
-      dark: vscode.Uri.joinPath(extensionUri, 'media', 'device-dark.svg'),
+      light: vscode.Uri.joinPath(environment.extensionUri, 'media', 'device-light.svg'),
+      dark: vscode.Uri.joinPath(environment.extensionUri, 'media', 'device-dark.svg'),
     };
+    panel.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(environment.extensionUri, 'media')] };
     panel.webview.html = this.html();
     this.disposables.push(
       panel.webview.onDidReceiveMessage((message: WebviewMessage) => this.onMessage(message)),
       panel.onDidChangeViewState(({ webviewPanel }) => {
         if (!webviewPanel.visible) {
-          this.sessions.forEach((session) => this.pauseStream(session));
+          this.sessions.forEach((session) => this.pause(session));
         }
         DevicePanel.updateVisibilityContext();
       }),
       panel.onDidDispose(() => this.dispose()),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('emulatorPanel.showToolbar')) {
-          this.sessions.forEach((session) => this.pauseStream(session));
+          this.sessions.forEach((session) => this.pause(session));
           panel.webview.html = this.html();
         }
       }),
@@ -253,7 +405,12 @@ export class DevicePanel {
   }
 
   get focusedEmulator(): RunningEmulator | undefined {
-    return this.focusedSession()?.emulator;
+    const session = this.focusedSession();
+    return session?.kind === 'emulator' ? session.emulator : undefined;
+  }
+
+  closeFocused(): void {
+    this.removeSession(this.requireFocused().id);
   }
 
   async toggleAlwaysOnTop(): Promise<void> {
@@ -265,51 +422,159 @@ export class DevicePanel {
     this.postDevices();
   }
 
-  focus(pid: number | undefined): void {
-    if (pid !== undefined && this.sessions.has(pid)) {
-      this.focusedId = pid;
+  focus(id: number | undefined): void {
+    if (id !== undefined && this.sessions.has(id)) {
+      this.focusedId = id;
       this.postDevices();
     }
   }
 
-  addSession(emulator: RunningEmulator): void {
+  prune(runningPids: Set<number>): void {
+    for (const session of [...this.sessions.values()]) {
+      if (session.kind === 'emulator' && !runningPids.has(session.id)) {
+        this.removeSession(session.id);
+      }
+    }
+  }
+
+  key(key: string): void {
+    const session = this.requireFocused();
+    if (session.kind === 'emulator') {
+      session.client.key(key);
+      return;
+    }
+    const keycode = ANDROID_KEYCODES[key];
+    if (keycode !== undefined) {
+      session.connection.pressKey(keycode);
+    }
+  }
+
+  async rotate(quadrants: number): Promise<void> {
+    const session = this.requireFocused();
+    this.refitOnAspect = fitEnabled();
+    if (session.kind === 'phone') {
+      session.connection.rotate();
+      return;
+    }
+    await session.client.setRotation(ROTATION_QUADRANT[session.rotation] + quadrants);
+  }
+
+  async showPane(pane: Pane): Promise<void> {
+    const session = this.requireFocused();
+    if (session.kind === 'phone') {
+      throw new Error(`${session.name} is a physical device, so the emulator's extended controls are not available.`);
+    }
+    if (!session.hasUi) {
+      throw new Error(
+        `${session.name} was started without the emulator UI, so extended controls are unavailable. Stop it and run it from the Device Manager.`,
+      );
+    }
+    await session.client.showExtendedControls(pane);
+  }
+
+  screenshot(): Promise<Buffer> {
+    const session = this.requireFocused();
+    return session.kind === 'phone' ? androidScreenshot(session.phone.serial) : session.client.screenshot();
+  }
+
+  requestFit(): void {
+    this.fitPending = true;
+    this.post({ type: 'requestLayout' });
+  }
+
+  private addEmulator(emulator: RunningEmulator, fit = true): void {
     if (!this.sessions.has(emulator.pid)) {
-      const session: Session = {
+      const session: EmulatorSession = {
+        kind: 'emulator',
+        id: emulator.pid,
+        name: emulator.avdName,
+        hasUi: emulator.hasUi,
         emulator,
-        client: new EmulatorClient(emulator, this.protoDir),
+        client: new EmulatorClient(emulator, this.environment.protoDir),
         rotation: 'PORTRAIT',
         awaitingDraw: false,
         box: { width: 0, height: 0 },
       };
-      this.sessions.set(emulator.pid, session);
+      this.sessions.set(session.id, session);
       session.client.displaySize().then(
         (size) => {
           session.displaySize = size;
           this.postDevices();
         },
-        (error: Error) => this.status(session, `Could not reach ${emulator.avdName}: ${error.message}`),
+        (error: Error) => this.status(session, `Could not reach ${session.name}: ${error.message}`),
       );
-      this.markForFit();
+      if (fit) {
+        this.markForFit();
+      }
     }
     this.focusedId = emulator.pid;
     this.updateTitle();
     this.postDevices();
   }
 
-  removeSession(pid: number): void {
-    const session = this.sessions.get(pid);
+  private addPhone(phone: AndroidPhone, fit = true): void {
+    const id = DevicePanel.phoneId(phone.serial);
+    if (!this.sessions.has(id)) {
+      let session: PhoneSession | undefined;
+      const connection = new ScrcpyConnection(phone.serial, this.environment.serverPath, {
+        onSession: (width, height) => {
+          if (session) {
+            this.postDevices();
+            this.post({ type: 'video', id, kind: 'session', width, height });
+          }
+        },
+        onPacket: (kind, pts, data) => {
+          if (session?.forwarding) {
+            this.post({ type: 'video', id, kind, pts, data: new Uint8Array(data) });
+          }
+        },
+        onEnd: (error) => {
+          if (session && this.sessions.get(id) === session) {
+            this.status(session, error ? `${phone.name} disconnected: ${error.message}` : `${phone.name} disconnected`);
+          }
+        },
+        onLog: (line) => log.appendLine(`[${phone.name}] ${line}`),
+      });
+      session = {
+        kind: 'phone',
+        id,
+        name: phone.name,
+        hasUi: false,
+        phone,
+        connection,
+        forwarding: false,
+        box: { width: 0, height: 0 },
+      };
+      this.sessions.set(id, session);
+      const started = session;
+      connection.start(PHONE_MAX_SIZE).catch((error: Error) => {
+        log.appendLine(`Could not mirror ${phone.name}: ${error.message}`);
+        if (this.sessions.get(id) === started) {
+          this.status(started, `Could not mirror ${phone.name}: ${error.message}`);
+        }
+      });
+      if (fit) {
+        this.markForFit();
+      }
+    }
+    this.focusedId = id;
+    this.updateTitle();
+    this.postDevices();
+  }
+
+  private removeSession(id: number): void {
+    const session = this.sessions.get(id);
     if (!session) {
       return;
     }
     clearTimeout(session.restartTimer);
-    this.pauseStream(session);
-    session.client.close();
-    this.sessions.delete(pid);
+    this.release(session);
+    this.sessions.delete(id);
     if (this.sessions.size === 0) {
       this.panel.dispose();
       return;
     }
-    if (this.focusedId === pid) {
+    if (this.focusedId === id) {
       this.focusedId = this.sessions.keys().next().value;
     }
     this.markForFit();
@@ -317,59 +582,30 @@ export class DevicePanel {
     this.postDevices();
   }
 
+  private release(session: Session): void {
+    if (session.kind === 'emulator') {
+      this.pause(session);
+      session.client.close();
+    } else {
+      session.connection.close();
+    }
+  }
+
   private stopSession(session: Session): void {
     const stopEmulator = DevicePanel.stopEmulator;
-    if (!stopEmulator || !stopOnClose()) {
-      this.removeSession(session.emulator.pid);
+    if (session.kind === 'phone' || !stopEmulator || !stopOnClose()) {
+      this.removeSession(session.id);
       return;
     }
     if (session.stopping) {
       return;
     }
-    const name = session.emulator.avdName;
     session.stopping = true;
-    this.status(session, `Stopping ${name}…`);
+    this.status(session, `Stopping ${session.name}…`);
     stopEmulator(session.emulator).catch((error: Error) => {
       session.stopping = false;
-      this.status(session, `Could not stop ${name}: ${error.message}`);
+      this.status(session, `Could not stop ${session.name}: ${error.message}`);
     });
-  }
-
-  prune(runningPids: Set<number>): void {
-    for (const pid of [...this.sessions.keys()]) {
-      if (!runningPids.has(pid)) {
-        this.removeSession(pid);
-      }
-    }
-  }
-
-  key(key: string): void {
-    this.requireFocused().client.key(key);
-  }
-
-  async rotate(quadrants: number): Promise<void> {
-    const session = this.requireFocused();
-    this.refitOnAspect = fitEnabled();
-    await session.client.setRotation(ROTATION_QUADRANT[session.rotation] + quadrants);
-  }
-
-  async showPane(pane: Pane): Promise<void> {
-    const session = this.requireFocused();
-    if (!session.emulator.hasUi) {
-      throw new Error(
-        `${session.emulator.avdName} was started without the emulator UI, so extended controls are unavailable. Stop it and run it from the Device Manager.`,
-      );
-    }
-    await session.client.showExtendedControls(pane);
-  }
-
-  screenshot(): Promise<Buffer> {
-    return this.requireFocused().client.screenshot();
-  }
-
-  requestFit(): void {
-    this.fitPending = true;
-    void this.panel.webview.postMessage({ type: 'requestLayout' });
   }
 
   private focusedSession(): Session | undefined {
@@ -393,23 +629,36 @@ export class DevicePanel {
 
   private updateTitle(): void {
     const [only] = this.sessions.values();
-    this.panel.title = this.sessions.size === 1 && only ? only.emulator.avdName : 'Running Devices';
+    this.panel.title = this.sessions.size === 1 && only ? only.name : 'Running Devices';
+  }
+
+  private post(message: object): void {
+    void this.panel.webview.postMessage(message);
   }
 
   private postDevices(): void {
-    void this.panel.webview.postMessage({
+    DevicePanel.sessionsChanged.fire();
+    this.post({
       type: 'devices',
       focused: this.focusedId,
       stopOnClose: stopOnClose(),
       separateWindow: this.separateWindow,
       alwaysOnTop: this.alwaysOnTop,
       devices: [...this.sessions.values()].map((session) => ({
-        id: session.emulator.pid,
-        name: session.emulator.avdName,
-        hasUi: session.emulator.hasUi,
-        aspect: session.displaySize ? session.displaySize.width / session.displaySize.height : 0,
+        id: session.id,
+        name: session.name,
+        hasUi: session.hasUi,
+        transport: session.kind === 'phone' ? 'h264' : 'png',
+        aspect: this.aspectOf(session),
       })),
     });
+  }
+
+  private aspectOf(session: Session): number {
+    if (session.kind === 'phone') {
+      return session.connection.height ? session.connection.width / session.connection.height : 0;
+    }
+    return session.displaySize ? session.displaySize.width / session.displaySize.height : 0;
   }
 
   private onMessage(message: WebviewMessage): void {
@@ -445,23 +694,75 @@ export class DevicePanel {
     switch (message.type) {
       case 'close':
         this.stopSession(session);
-        break;
+        return;
       case 'focus':
         this.focusedId = message.id;
-        break;
+        return;
       case 'command':
         this.focusedId = message.id;
         void vscode.commands.executeCommand(message.command);
-        break;
+        return;
+    }
+    if (session.kind === 'phone') {
+      this.onPhoneMessage(session, message);
+    } else {
+      this.onEmulatorMessage(session, message);
+    }
+  }
+
+  private onPhoneMessage(session: PhoneSession, message: WebviewMessage): void {
+    const { connection } = session;
+    switch (message.type) {
+      case 'resize': {
+        const visible = message.width > 0 && message.height > 0;
+        if (visible && !session.forwarding) {
+          session.forwarding = true;
+          connection.resetVideo();
+        } else if (!visible) {
+          session.forwarding = false;
+        }
+        return;
+      }
+      case 'videoError':
+        connection.resetVideo();
+        return;
+      case 'videoStarted':
+        log.appendLine(`[${session.name}] Mirroring ${message.width}x${message.height}`);
+        return;
+      case 'pointer':
+        connection.touch(message.phase, message.pointer, clamp01(message.u) * (connection.width - 1), clamp01(message.v) * (connection.height - 1));
+        return;
+      case 'wheel':
+        connection.scroll(
+          clamp01(message.u) * (connection.width - 1),
+          clamp01(message.v) * (connection.height - 1),
+          -message.dx / 100,
+          -message.dy / 100,
+        );
+        return;
+      case 'key': {
+        const keycode = TYPED_KEYCODES[message.key];
+        if (keycode !== undefined) {
+          connection.key(message.eventType === 'keyup' ? 'up' : 'down', keycode);
+        } else if (message.eventType === 'keydown' && [...message.key].length === 1) {
+          connection.text(message.key);
+        }
+        return;
+      }
+    }
+  }
+
+  private onEmulatorMessage(session: EmulatorSession, message: WebviewMessage): void {
+    switch (message.type) {
       case 'resize': {
         session.box = { width: Math.round(message.width * message.dpr), height: Math.round(message.height * message.dpr) };
         clearTimeout(session.restartTimer);
         if (!session.box.width || !session.box.height) {
-          this.pauseStream(session);
-          break;
+          this.pause(session);
+          return;
         }
         session.restartTimer = setTimeout(() => this.startStream(session), session.stopStream ? 150 : 0);
-        break;
+        return;
       }
       case 'drawn': {
         session.awaitingDraw = false;
@@ -470,14 +771,14 @@ export class DevicePanel {
           session.pendingFrame = undefined;
           this.postFrame(session, next);
         }
-        break;
+        return;
       }
       case 'pointer': {
         const point = this.toDevice(session, message.u, message.v);
         if (point) {
           session.client.touch(point.x, point.y, message.phase !== 'up', message.pointer);
         }
-        break;
+        return;
       }
       case 'wheel': {
         const point = this.toDevice(session, message.u, message.v);
@@ -485,11 +786,11 @@ export class DevicePanel {
           session.client.mouseMove(point.x, point.y);
         }
         session.client.wheel(Math.round(-message.dx), Math.round(-message.dy));
-        break;
+        return;
       }
       case 'key':
         session.client.key(message.key, message.eventType);
-        break;
+        return;
     }
   }
 
@@ -531,12 +832,11 @@ export class DevicePanel {
     log.appendLine(`Fit column by ${change}px: ${details}`);
   }
 
-  private toDevice(session: Session, u: number, v: number): { x: number; y: number } | undefined {
+  private toDevice(session: EmulatorSession, u: number, v: number): { x: number; y: number } | undefined {
     if (!session.displaySize) {
       return undefined;
     }
-    const clamp = (n: number) => Math.min(Math.max(n, 0), 1);
-    const [cu, cv] = [clamp(u), clamp(v)];
+    const [cu, cv] = [clamp01(u), clamp01(v)];
     const w = session.displaySize.width - 1;
     const h = session.displaySize.height - 1;
     switch (session.rotation) {
@@ -551,8 +851,8 @@ export class DevicePanel {
     }
   }
 
-  private startStream(session: Session): void {
-    this.pauseStream(session);
+  private startStream(session: EmulatorSession): void {
+    this.pause(session);
     const { width, height } = session.box;
     if (!width || !height) {
       return;
@@ -563,24 +863,27 @@ export class DevicePanel {
       (frame) => this.onFrame(session, frame),
       (error) => {
         session.stopStream = undefined;
-        const name = session.emulator.avdName;
         if (session.stopping) {
-          this.status(session, `Stopping ${name}…`);
+          this.status(session, `Stopping ${session.name}…`);
         } else {
-          this.status(session, error ? `${name} disconnected: ${error.details || error.message}` : `${name} stopped`);
+          this.status(session, error ? `${session.name} disconnected: ${error.details || error.message}` : `${session.name} stopped`);
         }
       },
     );
   }
 
-  private pauseStream(session: Session): void {
+  private pause(session: Session): void {
+    if (session.kind === 'phone') {
+      session.forwarding = false;
+      return;
+    }
     session.stopStream?.();
     session.stopStream = undefined;
     session.awaitingDraw = false;
     session.pendingFrame = undefined;
   }
 
-  private onFrame(session: Session, frame: Frame): void {
+  private onFrame(session: EmulatorSession, frame: Frame): void {
     session.rotation = frame.rotation;
     if (session.awaitingDraw) {
       session.pendingFrame = frame;
@@ -589,31 +892,26 @@ export class DevicePanel {
     this.postFrame(session, frame);
   }
 
-  private postFrame(session: Session, frame: Frame): void {
+  private postFrame(session: EmulatorSession, frame: Frame): void {
     session.awaitingDraw = true;
-    this.panel.webview
-      .postMessage({ type: 'frame', id: session.emulator.pid, png: new Uint8Array(frame.png) })
-      .then((delivered) => {
-        if (!delivered) {
-          session.awaitingDraw = false;
-        }
-      });
+    this.panel.webview.postMessage({ type: 'frame', id: session.id, png: new Uint8Array(frame.png) }).then((delivered) => {
+      if (!delivered) {
+        session.awaitingDraw = false;
+      }
+    });
   }
 
   private status(session: Session, text: string | undefined): void {
-    void this.panel.webview.postMessage({ type: 'status', id: session.emulator.pid, text });
+    this.post({ type: 'status', id: session.id, text });
   }
 
   private dispose(): void {
     const stopEmulator = stopOnClose() && !this.keepEmulatorsRunning ? DevicePanel.stopEmulator : undefined;
     for (const session of this.sessions.values()) {
       clearTimeout(session.restartTimer);
-      this.pauseStream(session);
-      session.client.close();
-      if (stopEmulator && !session.stopping) {
-        stopEmulator(session.emulator).catch((error: Error) =>
-          log.appendLine(`Could not stop ${session.emulator.avdName}: ${error.message}`),
-        );
+      this.release(session);
+      if (stopEmulator && session.kind === 'emulator' && !session.stopping) {
+        stopEmulator(session.emulator).catch((error: Error) => log.appendLine(`Could not stop ${session.name}: ${error.message}`));
       }
     }
     this.sessions.clear();
@@ -622,23 +920,25 @@ export class DevicePanel {
       DevicePanel.instance = undefined;
       DevicePanel.updateVisibilityContext();
     }
+    DevicePanel.sessionsChanged.fire();
   }
 
   private toolbarHtml(): string {
-    if (!vscode.workspace.getConfiguration('emulatorPanel').get<boolean>('showToolbar', true)) {
+    if (!settings().get<boolean>('showToolbar', true)) {
       return '';
     }
-    const groups = TOOL_GROUPS.map((tools) =>
-      tools
+    const groups = TOOL_GROUPS.map((tools) => {
+      const buttons = tools
         .map((tool) => {
           const label = tool.keys ? `${tool.title} (${shortcut(tool.keys)})` : tool.title;
-          const needsUi = tool.needsUi ? ` data-needs-ui="${tool.title}: unavailable, this emulator was started without its UI"` : '';
-          return `<button class="tool" data-command="${tool.command}" title="${label}" aria-label="${tool.title}"${needsUi}>${tool.svg}</button>`;
+          const needsUi = tool.needsUi ? ` data-needs-ui="${tool.title}: not available on this device"` : '';
+          const collapse = tool.collapse ? ` data-collapse="${tool.collapse}"` : '';
+          return `<button class="tool" data-command="${tool.command}" title="${label}" aria-label="${tool.title}"${needsUi}${collapse}>${tool.svg}</button>`;
         })
-        .join(''),
-    );
-    const actions = `<span class="separator panel-separator"></span><span class="panel-actions">${this.panelActionsHtml()}</span>`;
-    return `<div class="toolbar" role="toolbar">${groups.join('<span class="separator"></span>')}${actions}</div>`;
+        .join('');
+      return `<span class="tool-group">${buttons}</span>`;
+    });
+    return `<div class="toolbar" role="toolbar">${groups.join('')}<span class="tool-group panel-actions">${this.panelActionsHtml()}</span></div>`;
   }
 
   private panelActionsHtml(): string {
@@ -651,11 +951,7 @@ export class DevicePanel {
         icon('<rect x="3" y="8" width="12" height="12" rx="1.5"/><path d="M8 8V5.5A1.5 1.5 0 0 1 9.5 4h9A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H15"/>'),
       ),
       button('onTop', 'Keep window on top', icon('<path d="M9 3.5h6l-1 5.5 3 3.5H7l3-3.5z"/><path d="M12 12.5V20.5"/>')),
-      button(
-        'mainWindow',
-        'Move back to main window',
-        icon('<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M15 9l-5 5M10 9.5V14h4.5"/>'),
-      ),
+      button('mainWindow', 'Move back to main window', icon('<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M15 9l-5 5M10 9.5V14h4.5"/>')),
       button('add', 'Add device', icon('<path d="M12 5v14M5 12h14"/>')),
     ].join('');
   }
@@ -663,7 +959,7 @@ export class DevicePanel {
   private html(): string {
     const webview = this.panel.webview;
     const nonce = crypto.randomBytes(16).toString('hex');
-    const media = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', file));
+    const media = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(this.environment.extensionUri, 'media', file));
     return `<!DOCTYPE html>
 <html lang="en">
 <head>

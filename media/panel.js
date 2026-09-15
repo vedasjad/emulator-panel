@@ -5,6 +5,8 @@
   const toolbarTemplate = document.getElementById('toolbar-template');
   const GAP = 12;
   const DEFAULT_ASPECT = 9 / 20;
+  const MAX_DECODE_QUEUE = 20;
+  const H264_CODEC = 'avc1.640033';
   const passthroughKeys = new Set(['Meta', 'Control', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']);
   const cells = new Map();
   let order = [];
@@ -25,6 +27,24 @@
     return toolbarTemplate.content.firstElementChild ? 36 : 0;
   }
 
+  function fitToolbar(cell) {
+    const toolbar = cell.toolbar;
+    if (!toolbar || cell.section.hidden) {
+      return;
+    }
+    const collapsible = [...toolbar.querySelectorAll('[data-collapse]')];
+    for (const button of collapsible) {
+      button.hidden = false;
+    }
+    for (let level = 1; level <= 4 && toolbar.scrollWidth > toolbar.clientWidth + 1; level++) {
+      for (const button of collapsible) {
+        if (Number(button.dataset.collapse) <= level) {
+          button.hidden = true;
+        }
+      }
+    }
+  }
+
   function relayout() {
     document.body.classList.toggle('multi', order.length > 1);
     const width = container.clientWidth;
@@ -42,6 +62,7 @@
     for (const chip of chips.children) {
       chip.classList.toggle('focused', Number(chip.dataset.id) === focusedId);
     }
+    cells.forEach(fitToolbar);
   }
 
   function reportLayout(reason) {
@@ -66,6 +87,23 @@
     const scale = Math.min(cell.viewport.clientWidth / cell.frameWidth, cell.viewport.clientHeight / cell.frameHeight);
     cell.canvas.style.width = `${Math.floor(cell.frameWidth * scale)}px`;
     cell.canvas.style.height = `${Math.floor(cell.frameHeight * scale)}px`;
+  }
+
+  function applyFrameSize(cell, width, height) {
+    if (cell.canvas.width !== width || cell.canvas.height !== height) {
+      cell.canvas.width = width;
+      cell.canvas.height = height;
+    }
+    cell.frameWidth = width;
+    cell.frameHeight = height;
+    const aspect = width / height;
+    const changed = Math.abs(aspect - cell.aspect) > 0.01;
+    cell.aspect = aspect;
+    layoutCanvas(cell);
+    if (changed) {
+      relayout();
+      reportLayout('aspect');
+    }
   }
 
   function createCell(device) {
@@ -95,6 +133,7 @@
     const cell = {
       id: device.id,
       name: device.name,
+      transport: device.transport,
       aspect: device.aspect || DEFAULT_ASPECT,
       section,
       toolbar,
@@ -107,6 +146,9 @@
       pointers: new Set(),
       resizeTimer: undefined,
       observer: undefined,
+      decoder: undefined,
+      config: undefined,
+      waitingKey: true,
     };
     wireCell(cell);
     return cell;
@@ -166,6 +208,7 @@
 
     cell.observer = new ResizeObserver(() => {
       layoutCanvas(cell);
+      fitToolbar(cell);
       clearTimeout(cell.resizeTimer);
       cell.resizeTimer = setTimeout(
         () =>
@@ -197,7 +240,7 @@
         label.textContent = cell.name;
         const close = document.createElement('button');
         close.className = 'close';
-        close.title = stopOnClose ? `Stop ${cell.name}` : `Close ${cell.name} (it keeps running)`;
+        close.title = cell.transport === 'h264' ? `Stop mirroring ${cell.name}` : stopOnClose ? `Stop ${cell.name}` : `Close ${cell.name} (it keeps running)`;
         close.setAttribute('aria-label', close.title);
         close.textContent = '×';
         close.addEventListener('click', (event) => {
@@ -214,30 +257,92 @@
     );
   }
 
+  function releaseCell(cell) {
+    cell.observer.disconnect();
+    if (cell.decoder && cell.decoder.state !== 'closed') {
+      cell.decoder.close();
+    }
+    cell.section.remove();
+  }
+
   async function drawFrame(message) {
     const cell = cells.get(message.id);
     if (!cell) {
       return;
     }
     const bitmap = await createImageBitmap(new Blob([message.png], { type: 'image/png' }));
-    const { canvas } = cell;
-    if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-    }
-    cell.frameWidth = bitmap.width;
-    cell.frameHeight = bitmap.height;
-    const aspect = bitmap.width / bitmap.height;
-    const aspectChanged = Math.abs(aspect - cell.aspect) > 0.01;
-    cell.aspect = aspect;
-    layoutCanvas(cell);
+    applyFrameSize(cell, bitmap.width, bitmap.height);
     cell.context.drawImage(bitmap, 0, 0);
     bitmap.close();
     cell.status.hidden = true;
-    if (aspectChanged) {
-      relayout();
-      reportLayout('aspect');
+  }
+
+  function resetDecoder(cell) {
+    if (cell.decoder && cell.decoder.state !== 'closed') {
+      cell.decoder.close();
     }
+    const decoder = new VideoDecoder({
+      output: (frame) => {
+        if (cell.decoder === decoder) {
+          applyFrameSize(cell, frame.displayWidth, frame.displayHeight);
+          cell.context.drawImage(frame, 0, 0);
+          cell.status.hidden = true;
+          if (!cell.videoReported) {
+            cell.videoReported = true;
+            post({ type: 'videoStarted', id: cell.id, width: frame.displayWidth, height: frame.displayHeight });
+          }
+        }
+        frame.close();
+      },
+      error: () => {
+        if (cell.decoder === decoder) {
+          cell.decoder = undefined;
+          cell.waitingKey = true;
+          post({ type: 'videoError', id: cell.id });
+        }
+      },
+    });
+    decoder.configure({ codec: H264_CODEC, optimizeForLatency: true });
+    cell.decoder = decoder;
+    cell.waitingKey = true;
+  }
+
+  function handleVideo(message) {
+    const cell = cells.get(message.id);
+    if (!cell) {
+      return;
+    }
+    if (message.kind === 'session') {
+      applyFrameSize(cell, message.width, message.height);
+      cell.waitingKey = true;
+      return;
+    }
+    if (message.kind === 'config') {
+      cell.config = message.data;
+      resetDecoder(cell);
+      return;
+    }
+    const decoder = cell.decoder;
+    if (!decoder || decoder.state !== 'configured') {
+      return;
+    }
+    const key = message.kind === 'key';
+    if (cell.waitingKey && !key) {
+      return;
+    }
+    if (!key && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+      cell.waitingKey = true;
+      post({ type: 'videoError', id: cell.id });
+      return;
+    }
+    let data = message.data;
+    if (key && cell.config) {
+      data = new Uint8Array(cell.config.length + message.data.length);
+      data.set(cell.config);
+      data.set(message.data, cell.config.length);
+    }
+    cell.waitingKey = false;
+    decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: message.pts, data }));
   }
 
   window.addEventListener('message', async (event) => {
@@ -247,8 +352,7 @@
         const ids = new Set(message.devices.map((device) => device.id));
         for (const [id, cell] of cells) {
           if (!ids.has(id)) {
-            cell.observer.disconnect();
-            cell.section.remove();
+            releaseCell(cell);
             cells.delete(id);
           }
         }
@@ -291,6 +395,9 @@
         } finally {
           post({ type: 'drawn', id: message.id });
         }
+        break;
+      case 'video':
+        handleVideo(message);
         break;
       case 'status': {
         const cell = cells.get(message.id);

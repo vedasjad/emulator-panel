@@ -1,15 +1,23 @@
-import { execFile } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { AvdInfo, avdHome, readAvds } from './avds';
 import { RunningEmulator, discoveryDir, listRunning } from './discovery';
-import { adbPath, sdkRoot } from './sdk';
+import { AdbEntry, AndroidPhone, IosPhone, adb, listAdbEntries, listAndroidPhones, listIosPhones } from './physicalDevices';
+import { sdkRoot } from './sdk';
+import { SimulatorInfo, listSimulators, simulatorsSupported } from './simulators';
 
 export type DeviceStatus = 'stopped' | 'starting' | 'running' | 'stopping';
 
 export interface Device {
-  avd: AvdInfo;
+  id: string;
+  platform: 'android' | 'ios';
   status: DeviceStatus;
+  avd?: AvdInfo;
+  simulator?: SimulatorInfo;
+  androidPhone?: AndroidPhone;
+  iosPhone?: IosPhone;
   emulator?: RunningEmulator;
   serial?: string;
   external: boolean;
@@ -20,21 +28,20 @@ interface Transition {
   until: number;
 }
 
-function adb(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) =>
-    execFile(adbPath(), args, { timeout: 3000 }, (error, stdout) => (error ? reject(error) : resolve(stdout))),
-  );
-}
+const SIMULATOR_STATES: Record<string, DeviceStatus> = {
+  Booted: 'running',
+  Booting: 'starting',
+  'Shutting Down': 'stopping',
+};
 
-async function externalEmulators(knownSerials: Set<string>): Promise<Map<string, string>> {
-  const serials = (await adb(['devices']))
-    .split(/\r?\n/)
-    .map((line) => line.split('\t')[0]?.trim())
-    .filter((serial): serial is string => !!serial && serial.startsWith('emulator-') && !knownSerials.has(serial));
+async function externalEmulators(entries: AdbEntry[], knownSerials: Set<string>): Promise<Map<string, string>> {
+  const serials = entries
+    .map((entry) => entry.serial)
+    .filter((serial) => serial.startsWith('emulator-') && !knownSerials.has(serial));
   const names = new Map<string, string>();
   await Promise.all(
     serials.map(async (serial) => {
-      const output = await adb(['-s', serial, 'emu', 'avd', 'name']).catch(() => '');
+      const output = (await adb(['-s', serial, 'emu', 'avd', 'name'], 3000).catch(() => Buffer.alloc(0))).toString();
       const name = output.split(/\r?\n/)[0]?.trim();
       if (name && name !== 'OK') {
         names.set(serial, name);
@@ -56,7 +63,11 @@ export class DeviceStore implements vscode.Disposable {
   private debounceTimer: NodeJS.Timeout | undefined;
 
   constructor(private readonly shouldPoll: () => boolean) {
-    for (const dir of [discoveryDir(), avdHome()]) {
+    const dirs = [discoveryDir(), avdHome()];
+    if (simulatorsSupported) {
+      dirs.push(path.join(os.homedir(), 'Library', 'Developer', 'CoreSimulator', 'Devices'));
+    }
+    for (const dir of dirs) {
       try {
         this.watchers.push(fs.watch(dir, () => this.refreshSoon()));
       } catch {
@@ -70,24 +81,24 @@ export class DeviceStore implements vscode.Disposable {
     return this.devices;
   }
 
-  find(name: string): Device | undefined {
-    return this.devices.find((device) => device.avd.name === name);
+  find(id: string): Device | undefined {
+    return this.devices.find((device) => device.id === id);
   }
 
-  markStarting(name: string): void {
-    this.transitions.set(name, { status: 'starting', until: Date.now() + 180_000 });
+  markStarting(id: string): void {
+    this.transitions.set(id, { status: 'starting', until: Date.now() + 180_000 });
     this.applyTransitions();
     void this.refresh();
   }
 
-  markStopping(name: string): void {
-    this.transitions.set(name, { status: 'stopping', until: Date.now() + 60_000 });
+  markStopping(id: string): void {
+    this.transitions.set(id, { status: 'stopping', until: Date.now() + 60_000 });
     this.applyTransitions();
     void this.refresh();
   }
 
-  clearTransition(name: string): void {
-    this.transitions.delete(name);
+  clearTransition(id: string): void {
+    this.transitions.delete(id);
     void this.refresh();
   }
 
@@ -137,10 +148,22 @@ export class DeviceStore implements vscode.Disposable {
 
   private applyTransitions(): void {
     this.devices = this.devices.map((device) => {
-      const transition = this.transitions.get(device.avd.name);
+      const transition = this.transitions.get(device.id);
       return transition ? { ...device, status: transition.status } : device;
     });
     this.changed.fire(this.devices);
+  }
+
+  private resolveStatus(id: string, observed: DeviceStatus, settled: (transition: Transition) => boolean): DeviceStatus {
+    const transition = this.transitions.get(id);
+    if (!transition) {
+      return observed;
+    }
+    if (settled(transition) || Date.now() > transition.until) {
+      this.transitions.delete(id);
+      return observed;
+    }
+    return transition.status;
   }
 
   private async load(): Promise<Device[]> {
@@ -150,25 +173,49 @@ export class DeviceStore implements vscode.Disposable {
     } catch {
       root = undefined;
     }
-    const avds = readAvds(root);
     const running = listRunning();
     const serialOf = (emulator: RunningEmulator) => `emulator-${emulator.consolePort}`;
-    const external = await externalEmulators(new Set(running.map(serialOf))).catch(() => new Map<string, string>());
-    const now = Date.now();
-    return avds.map((avd) => {
+    const entries = await listAdbEntries().catch(() => [] as AdbEntry[]);
+    const [external, simulators, androidPhones, iosPhones] = await Promise.all([
+      externalEmulators(entries, new Set(running.map(serialOf))).catch(() => new Map<string, string>()),
+      listSimulators().catch(() => [] as SimulatorInfo[]),
+      listAndroidPhones(entries).catch(() => [] as AndroidPhone[]),
+      listIosPhones().catch(() => [] as IosPhone[]),
+    ]);
+
+    const emulators: Device[] = readAvds(root).map((avd) => {
       const emulator = running.find((candidate) => candidate.avdName === avd.name);
       const serial = emulator ? serialOf(emulator) : [...external].find(([, name]) => name === avd.name)?.[0];
-      let status: DeviceStatus = serial ? 'running' : 'stopped';
-      const transition = this.transitions.get(avd.name);
-      if (transition) {
-        const settled = transition.status === 'starting' ? !!emulator : !serial;
-        if (settled || now > transition.until) {
-          this.transitions.delete(avd.name);
-        } else {
-          status = transition.status;
-        }
-      }
-      return { avd, status, emulator, serial, external: !!serial && !emulator };
+      const status = this.resolveStatus(avd.name, serial ? 'running' : 'stopped', (transition) =>
+        transition.status === 'starting' ? !!emulator : !serial,
+      );
+      return { id: avd.name, platform: 'android', status, avd, emulator, serial, external: !!serial && !emulator };
     });
+
+    const androidDevices: Device[] = androidPhones.map((phone) => ({
+      id: `android:${phone.serial}`,
+      platform: 'android',
+      status: phone.state === 'device' ? 'running' : 'stopped',
+      androidPhone: phone,
+      serial: phone.serial,
+      external: false,
+    }));
+
+    const iosSimulators: Device[] = simulators.map((simulator) => {
+      const status = this.resolveStatus(simulator.udid, SIMULATOR_STATES[simulator.state] ?? 'stopped', (transition) =>
+        transition.status === 'starting' ? simulator.state === 'Booted' : simulator.state === 'Shutdown',
+      );
+      return { id: simulator.udid, platform: 'ios', status, simulator, external: false };
+    });
+
+    const iosDevices: Device[] = iosPhones.map((phone) => ({
+      id: `ios:${phone.udid}`,
+      platform: 'ios',
+      status: phone.connected ? 'running' : 'stopped',
+      iosPhone: phone,
+      external: false,
+    }));
+
+    return [...emulators, ...androidDevices, ...iosSimulators, ...iosDevices];
   }
 }

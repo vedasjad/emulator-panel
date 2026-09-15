@@ -28,7 +28,6 @@ body {
 body:not(.multi):not(.no-toolbar) #header,
 body:not(.multi) #chips,
 body.multi .toolbar .panel-actions,
-body.multi .toolbar .panel-separator,
 body:not(.in-window) [data-panel='mainWindow'],
 body:not(.in-window) [data-panel='onTop'],
 body.in-window [data-panel='newWindow'] {
@@ -132,11 +131,26 @@ body.in-window [data-panel='newWindow'] {
 .toolbar {
   flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
+  justify-content: safe center;
   padding: 4px;
+  overflow: hidden;
+}
+
+.tool-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.tool-group + .tool-group::before {
+  content: '';
+  width: 1px;
+  height: 16px;
+  margin: 0 6px;
+  background: var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
 }
 
 .tool {
@@ -166,6 +180,10 @@ body.in-window [data-panel='newWindow'] {
   cursor: default;
 }
 
+.tool[hidden] {
+  display: none;
+}
+
 .tool:focus-visible,
 .chip .close:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
@@ -192,13 +210,6 @@ body.in-window [data-panel='newWindow'] {
   background: var(--vscode-inputOption-activeBackground, var(--vscode-toolbar-activeBackground));
   color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
   box-shadow: inset 0 0 0 1px var(--vscode-inputOption-activeBorder, transparent);
-}
-
-.separator {
-  width: 1px;
-  height: 16px;
-  margin: 0 6px;
-  background: var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
 }
 
 .viewport {

@@ -42,6 +42,8 @@ const ABI_LABELS: Record<string, string> = {
   'armeabi-v7a': 'arm',
 };
 
+export const abiLabel = (abi: string | undefined) => (abi ? (ABI_LABELS[abi] ?? abi) : undefined);
+
 export function avdHome(): string {
   if (process.env.ANDROID_AVD_HOME) {
     return process.env.ANDROID_AVD_HOME;
@@ -58,14 +60,14 @@ function readIni(file: string): Record<string, string> {
   }
 }
 
-function apiLabel(api: string | undefined): string | undefined {
+export function apiLabel(api: string | undefined): string | undefined {
   if (!api || api.includes('.')) {
     return api;
   }
   return Number(api) >= 36 ? `${api}.0` : api;
 }
 
-function androidVersion(api: string | undefined): string | undefined {
+export function androidVersion(api: string | undefined): string | undefined {
   if (!api) {
     return undefined;
   }
@@ -113,7 +115,7 @@ export function readAvds(sdkRoot?: string): AvdInfo[] {
       api,
       apiLabel: apiLabel(api),
       androidVersion: androidVersion(api),
-      abi: abi ? (ABI_LABELS[abi] ?? abi) : undefined,
+      abi: abiLabel(abi),
       image: [config['tag.display'], abi].filter(Boolean).join(' · ') || undefined,
       device: config['hw.device.name'] ? [config['hw.device.manufacturer'], config['hw.device.name']].filter(Boolean).join(' ') : undefined,
       resolution: width && height ? `${width}×${height}` : undefined,
