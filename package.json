@@ -1,0 +1,180 @@
+{
+  "name": "emulator-panel",
+  "displayName": "Emulator Panel",
+  "description": "Run Android emulators inside a VS Code tab and keep the emulator's native extended controls.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vedasjad/emulator-panel.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "emulatorPanel", "title": "Emulators", "icon": "media/activitybar.svg" }
+      ]
+    },
+    "views": {
+      "emulatorPanel": [
+        { "type": "webview", "id": "emulatorPanel.devices", "name": "Device Manager", "contextualTitle": "Emulators" }
+      ]
+    },
+    "commands": [
+      { "command": "emulatorPanel.open", "title": "Open Device", "category": "Emulator", "icon": "$(add)" },
+      { "command": "emulatorPanel.stop", "title": "Stop Device", "category": "Emulator", "icon": "$(debug-stop)" },
+      { "command": "emulatorPanel.location", "title": "Location", "category": "Emulator", "icon": "$(location)" },
+      { "command": "emulatorPanel.extendedControls", "title": "Extended Controls", "category": "Emulator", "icon": "$(gear)" },
+      { "command": "emulatorPanel.cellular", "title": "Cellular", "category": "Emulator" },
+      { "command": "emulatorPanel.battery", "title": "Battery", "category": "Emulator" },
+      { "command": "emulatorPanel.phone", "title": "Phone", "category": "Emulator" },
+      { "command": "emulatorPanel.virtualSensors", "title": "Virtual Sensors", "category": "Emulator" },
+      { "command": "emulatorPanel.fingerprint", "title": "Fingerprint", "category": "Emulator" },
+      { "command": "emulatorPanel.camera", "title": "Camera", "category": "Emulator" },
+      { "command": "emulatorPanel.microphone", "title": "Microphone", "category": "Emulator" },
+      { "command": "emulatorPanel.screenRecord", "title": "Screen Record", "category": "Emulator" },
+      { "command": "emulatorPanel.snapshots", "title": "Snapshots", "category": "Emulator" },
+      { "command": "emulatorPanel.settings", "title": "Emulator Settings", "category": "Emulator" },
+      { "command": "emulatorPanel.back", "title": "Back", "category": "Emulator" },
+      { "command": "emulatorPanel.home", "title": "Home", "category": "Emulator" },
+      { "command": "emulatorPanel.overview", "title": "Overview", "category": "Emulator" },
+      { "command": "emulatorPanel.power", "title": "Power", "category": "Emulator" },
+      { "command": "emulatorPanel.volumeUp", "title": "Volume Up", "category": "Emulator" },
+      { "command": "emulatorPanel.volumeDown", "title": "Volume Down", "category": "Emulator" },
+      { "command": "emulatorPanel.rotateLeft", "title": "Rotate Left", "category": "Emulator", "icon": "$(debug-step-back)" },
+      { "command": "emulatorPanel.rotateRight", "title": "Rotate Right", "category": "Emulator", "icon": "$(debug-step-over)" },
+      { "command": "emulatorPanel.screenshot", "title": "Take Screenshot", "category": "Emulator", "icon": "$(device-camera)" },
+      { "command": "emulatorPanel.fitColumn", "title": "Fit Column to Devices", "category": "Emulator" },
+      { "command": "emulatorPanel.toggleRunningDevices", "title": "Toggle Running Devices", "category": "Emulator" },
+      { "command": "emulatorPanel.showRunningDevices", "title": "Show Running Devices", "category": "Emulator", "icon": "$(layout-sidebar-right-off)" },
+      { "command": "emulatorPanel.hideRunningDevices", "title": "Hide Running Devices (emulators keep running)", "category": "Emulator", "icon": "$(layout-sidebar-right)" },
+      { "command": "emulatorPanel.moveToNewWindow", "title": "Open Running Devices in New Window", "category": "Emulator", "icon": "$(multiple-windows)" },
+      { "command": "emulatorPanel.moveToMainWindow", "title": "Move Running Devices to Main Window", "category": "Emulator", "icon": "$(window)" },
+      { "command": "emulatorPanel.toggleAlwaysOnTop", "title": "Toggle Running Devices Window Always on Top", "category": "Emulator", "icon": "$(pinned)" },
+      { "command": "emulatorPanel.refreshDevices", "title": "Refresh", "category": "Emulator", "icon": "$(refresh)" },
+      { "command": "emulatorPanel.openSettings", "title": "Open Settings", "category": "Emulator", "icon": "$(settings-gear)" },
+      { "command": "emulatorPanel.showLog", "title": "Show Log", "category": "Emulator", "icon": "$(output)" },
+      { "command": "emulatorPanel.openAvdFolder", "title": "Reveal AVD Folder", "category": "Emulator", "icon": "$(folder-opened)" },
+      { "command": "emulatorPanel.stopAll", "title": "Stop All Emulators", "category": "Emulator", "icon": "$(debug-stop)" }
+    ],
+    "menus": {
+      "editor/title": [
+        { "command": "emulatorPanel.rotateLeft", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@1" },
+        { "command": "emulatorPanel.rotateRight", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@2" },
+        { "command": "emulatorPanel.screenshot", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@3" },
+        { "command": "emulatorPanel.fitColumn", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@4" },
+        { "command": "emulatorPanel.stop", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "2_lifecycle@1" }
+      ],
+      "view/title": [
+        { "command": "emulatorPanel.showRunningDevices", "when": "view == emulatorPanel.devices && !emulatorPanel.runningDevicesVisible", "group": "navigation@0" },
+        { "command": "emulatorPanel.hideRunningDevices", "when": "view == emulatorPanel.devices && emulatorPanel.runningDevicesVisible", "group": "navigation@0" },
+        { "command": "emulatorPanel.moveToNewWindow", "when": "view == emulatorPanel.devices && !emulatorPanel.runningDevicesInWindow", "group": "navigation@1" },
+        { "command": "emulatorPanel.moveToMainWindow", "when": "view == emulatorPanel.devices && emulatorPanel.runningDevicesInWindow", "group": "navigation@1" },
+        { "command": "emulatorPanel.refreshDevices", "when": "view == emulatorPanel.devices", "group": "navigation@2" },
+        { "command": "emulatorPanel.openSettings", "when": "view == emulatorPanel.devices", "group": "navigation@3" },
+        { "command": "emulatorPanel.stopAll", "when": "view == emulatorPanel.devices", "group": "1_devices@1" },
+        { "command": "emulatorPanel.openAvdFolder", "when": "view == emulatorPanel.devices", "group": "1_devices@2" },
+        { "command": "emulatorPanel.showLog", "when": "view == emulatorPanel.devices", "group": "1_devices@3" }
+      ],
+      "commandPalette": [
+        { "command": "emulatorPanel.showRunningDevices", "when": "false" },
+        { "command": "emulatorPanel.hideRunningDevices", "when": "false" },
+        { "command": "emulatorPanel.moveToMainWindow", "when": "emulatorPanel.runningDevicesInWindow" },
+        { "command": "emulatorPanel.toggleAlwaysOnTop", "when": "emulatorPanel.runningDevicesInWindow" }
+      ]
+    },
+    "keybindings": [
+      { "command": "emulatorPanel.location", "key": "ctrl+shift+l", "mac": "cmd+shift+l", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.cellular", "key": "ctrl+shift+c", "mac": "cmd+shift+c", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.battery", "key": "ctrl+shift+b", "mac": "cmd+shift+b", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.virtualSensors", "key": "ctrl+shift+v", "mac": "cmd+shift+v", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.fingerprint", "key": "ctrl+shift+f", "mac": "cmd+shift+f", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.screenRecord", "key": "ctrl+shift+r", "mac": "cmd+shift+r", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.snapshots", "key": "ctrl+shift+n", "mac": "cmd+shift+n", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.settings", "key": "ctrl+shift+s", "mac": "cmd+shift+s", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.camera", "key": "ctrl+shift+a", "mac": "cmd+shift+a", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.back", "key": "ctrl+backspace", "mac": "cmd+backspace", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.home", "key": "ctrl+shift+h", "mac": "cmd+shift+h", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.overview", "key": "ctrl+o", "mac": "cmd+o", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.rotateLeft", "key": "ctrl+left", "mac": "cmd+left", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.rotateRight", "key": "ctrl+right", "mac": "cmd+right", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.volumeUp", "key": "ctrl+=", "mac": "cmd+=", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.volumeDown", "key": "ctrl+-", "mac": "cmd+-", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.power", "key": "ctrl+p", "mac": "cmd+p", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
+      { "command": "emulatorPanel.screenshot", "key": "ctrl+s", "mac": "cmd+s", "when": "activeWebviewPanelId == 'emulatorPanel.device'" }
+    ],
+    "configuration": {
+      "title": "Emulator Panel",
+      "properties": {
+        "emulatorPanel.sdkPath": {
+          "type": "string",
+          "default": "",
+          "description": "Android SDK root. When empty, ANDROID_HOME, ANDROID_SDK_ROOT and the default SDK locations are used."
+        },
+        "emulatorPanel.emulatorArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments passed to the emulator when starting an AVD, for example [\"-no-snapshot-load\"]."
+        },
+        "emulatorPanel.showToolbar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the device toolbar (Back, Home, volume, rotate, screenshot, Location, extended controls) above each screen."
+        },
+        "emulatorPanel.fitColumnOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Resize the Running Devices column to fit its devices when a device is added or removed, or rotates, so there is no empty space beside the screens. A width you drag to afterwards is kept."
+        },
+        "emulatorPanel.stopOnClose": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stop an emulator when you close it in Running Devices, either with the × beside its name or by closing the tab. When off, closing only removes it from the tab and it keeps running."
+        },
+        "emulatorPanel.compactWindow": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use a compact window, without VS Code's tab bar, when Running Devices is opened in a new window."
+        },
+        "emulatorPanel.openIn": {
+          "type": "string",
+          "enum": ["beside", "active"],
+          "default": "beside",
+          "description": "Editor column the Running Devices tab opens in."
+        },
+        "emulatorPanel.screenshotFolder": {
+          "type": "string",
+          "default": "",
+          "description": "Folder for screenshots. When empty, screenshots are saved to the Desktop."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.0",
+    "@grpc/proto-loader": "^0.7.13"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}
