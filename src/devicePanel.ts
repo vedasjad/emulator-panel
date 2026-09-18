@@ -152,7 +152,7 @@ type WebviewMessage =
   | { type: 'close'; id: number }
   | { type: 'focus'; id: number }
   | { type: 'command'; id: number; command: string }
-  | { type: 'layout'; reason: 'devices' | 'aspect' | 'request'; width: number; needed: number }
+  | { type: 'layout'; reason: 'devices' | 'aspect' | 'request' | 'resize'; width: number; needed: number }
   | { type: 'resize'; id: number; width: number; height: number; dpr: number }
   | { type: 'drawn'; id: number }
   | { type: 'videoError'; id: number }
@@ -474,6 +474,7 @@ export class DevicePanel {
   private keepEmulatorsRunning = false;
   private separateWindow = false;
   private alwaysOnTop = false;
+  private columnWidth: { total: number; size: number; groups: number } | undefined;
   private readonly lockedGroups = new WeakSet<vscode.TabGroup>();
 
   private constructor(
@@ -838,6 +839,8 @@ export class DevicePanel {
           this.refitOnAspect = false;
         }
         this.fitColumn(message.width, message.needed).catch((error: Error) => log.appendLine(`Fit failed: ${error.message}`));
+      } else if (message.reason === 'resize') {
+        this.keepColumnWidth().catch((error: Error) => log.appendLine(`Keeping the column width failed: ${error.message}`));
       }
       return;
     }
@@ -978,13 +981,59 @@ export class DevicePanel {
         ? Math.min(wanted, Math.max(0, neighbor.size - MIN_NEIGHBOR_WIDTH))
         : Math.max(wanted, MIN_NEIGHBOR_WIDTH - group.size);
     if (Math.abs(change) < 2) {
+      this.rememberColumn(layout, index);
       log.appendLine(`Fit not needed: ${details}`);
       return;
     }
     group.size += change;
     neighbor.size -= change;
     await vscode.commands.executeCommand('vscode.setEditorLayout', layout);
+    this.rememberColumn(layout, index);
     log.appendLine(`Fit column by ${change}px: ${details}`);
+  }
+
+  private rememberColumn(layout: EditorGroupLayout, index: number): void {
+    this.columnWidth = {
+      total: layout.groups.reduce((sum, group) => sum + (group.size ?? 0), 0),
+      size: layout.groups[index].size ?? 0,
+      groups: layout.groups.length,
+    };
+  }
+
+  private async keepColumnWidth(): Promise<void> {
+    const column = this.panel.viewColumn;
+    const layout = await vscode.commands.executeCommand<EditorGroupLayout>('vscode.getEditorLayout');
+    if (!column || !layout || layout.orientation !== 0 || layout.groups.length < 2 || layout.groups.some((group) => group.groups?.length)) {
+      this.columnWidth = undefined;
+      return;
+    }
+    const index = column - 1;
+    const group = layout.groups[index];
+    const neighbor = layout.groups[index > 0 ? index - 1 : index + 1];
+    const previous = this.columnWidth;
+    this.rememberColumn(layout, index);
+    const current = this.columnWidth;
+    if (
+      !group?.size ||
+      !neighbor?.size ||
+      !previous ||
+      !current ||
+      previous.groups !== current.groups ||
+      Math.abs(previous.total - current.total) < 2 ||
+      Math.abs(previous.size - group.size) < 2
+    ) {
+      return;
+    }
+    const wanted = Math.round(previous.size - group.size);
+    const change = wanted > 0 ? Math.min(wanted, Math.max(0, neighbor.size - MIN_NEIGHBOR_WIDTH)) : wanted;
+    if (Math.abs(change) < 2) {
+      return;
+    }
+    group.size += change;
+    neighbor.size -= change;
+    await vscode.commands.executeCommand('vscode.setEditorLayout', layout);
+    this.rememberColumn(layout, index);
+    log.appendLine(`Kept Running Devices at ${group.size}px after the editor area changed from ${Math.round(previous.total)}px to ${Math.round(current.total)}px`);
   }
 
   private toDevice(session: EmulatorSession, u: number, v: number): { x: number; y: number } | undefined {

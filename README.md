@@ -5,7 +5,7 @@ Run Android emulators inside VS Code, the way Android Studio's Running Devices p
 ## Features
 
 - **Device Manager** in the activity bar: every AVD with its Android version, ABI and API level, sortable by name, API or type. Run, stop, cold boot, wipe data, delete (to the Trash), reveal files or edit `config.ini`. Emulators started outside the extension are detected through adb.
-- **Running Devices** editor tab: one or more emulator screens with touch, scroll and keyboard input. Devices sit side by side when the tab is wide enough, otherwise one at a time with a switcher. The editor column resizes to fit the devices.
+- **Running Devices** editor tab: one or more emulator screens with touch, scroll and keyboard input. Devices sit side by side when the tab is wide enough, otherwise one at a time with a switcher. The editor column resizes to fit the devices and keeps that width when the sidebar opens or closes or the window is resized; drag the border to change it.
 - **Native extended controls**: the emulator runs with its window hidden, so the Location, Extended Controls and other panes open as the emulator's real windows.
 - **Separate window**: move Running Devices into its own compact window, keep it on top, and move it back beside your editor. Once moved, it keeps opening in its own window, directly at the position and size you last left it, until you move it back. Each device in the window has its own × to stop it. The window stays open when its last device stops, with a button to start another. Closing the window with devices in it stops them and leaves the window open and empty; closing the empty window closes it.
 - **Editor groups**: files never open in the Running Devices group. When it is the only group left, a new file opens to its left.

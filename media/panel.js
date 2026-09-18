@@ -418,7 +418,12 @@
     }
   });
 
-  new ResizeObserver(() => relayout()).observe(container);
+  let resizeReport;
+  new ResizeObserver(() => {
+    relayout();
+    clearTimeout(resizeReport);
+    resizeReport = setTimeout(() => reportLayout('resize'), 80);
+  }).observe(container);
 
   let windowBounds;
   let windowBoundsTimer;
