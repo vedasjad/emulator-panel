@@ -98,6 +98,7 @@ export interface PanelEnvironment {
   extensionUri: vscode.Uri;
   protoDir: string;
   serverPath: string;
+  state: vscode.Memento;
 }
 
 export interface SavedPanelState {
@@ -147,6 +148,7 @@ const PANEL_ACTION_COMMANDS: Record<PanelAction, string> = {
 type WebviewMessage =
   | { type: 'ready' }
   | { type: 'panelAction'; action: PanelAction }
+  | { type: 'windowBounds'; x: number; y: number; width: number; height: number }
   | { type: 'close'; id: number }
   | { type: 'focus'; id: number }
   | { type: 'command'; id: number; command: string }
@@ -164,14 +166,30 @@ const fitEnabled = () => settings().get<boolean>('fitColumnOnOpen', true);
 const stopOnClose = () => settings().get<boolean>('stopOnClose', true);
 const compactWindow = () => settings().get<boolean>('compactWindow', true);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const OPEN_IN_WINDOW = 'emulatorPanel.openInWindow';
+const WINDOW_BOUNDS = 'emulatorPanel.windowBounds';
+const WINDOW_VIEW_TYPE = 'emulatorPanel.window';
+const WINDOW_URI = vscode.Uri.from({ scheme: 'emulator-panel', path: '/Running Devices' });
+const AUX_WINDOW_GROUP = -3;
 const clamp01 = (value: number) => Math.min(Math.max(value, 0), 1);
+
+interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+type PendingDevice = { kind: 'emulator'; emulator: RunningEmulator } | { kind: 'phone'; phone: AndroidPhone };
 
 export class DevicePanel {
   static readonly viewType = 'emulatorPanel.device';
+  static readonly windowViewType = WINDOW_VIEW_TYPE;
   static stopEmulator: ((emulator: RunningEmulator) => Promise<void>) | undefined;
   private static instance: DevicePanel | undefined;
   private static hiddenIds: number[] = [];
   private static hiddenFocus: number | undefined;
+  private static pendingWindow: { devices: PendingDevice[]; focus?: number } | undefined;
   private static readonly phoneIds = new Map<string, number>();
   private static readonly sessionsChanged = new vscode.EventEmitter<void>();
   static readonly onDidChangeSessions = DevicePanel.sessionsChanged.event;
@@ -194,7 +212,7 @@ export class DevicePanel {
 
   static savedState(): SavedPanelState | undefined {
     const devicePanel = DevicePanel.instance;
-    if (!devicePanel || devicePanel.sessions.size === 0) {
+    if (!devicePanel || (devicePanel.sessions.size === 0 && !devicePanel.separateWindow)) {
       return undefined;
     }
     const focused = devicePanel.focusedSession();
@@ -219,6 +237,54 @@ export class DevicePanel {
     const devicePanel = new DevicePanel(panel, environment);
     DevicePanel.instance = devicePanel;
     devicePanel.separateWindow = !!state?.separateWindow;
+    devicePanel.addSaved(state, running, phones);
+    if (devicePanel.sessions.size === 0 && !devicePanel.separateWindow) {
+      panel.dispose();
+      return;
+    }
+    devicePanel.updateTitle();
+    DevicePanel.updateVisibilityContext();
+    log.appendLine(`Restored Running Devices: ${[...devicePanel.sessions.values()].map((session) => session.name).join(', ')}`);
+  }
+
+  static get expectingWindow(): boolean {
+    return !!DevicePanel.pendingWindow;
+  }
+
+  static adopt(
+    panel: vscode.WebviewPanel,
+    environment: PanelEnvironment,
+    state: SavedPanelState | undefined,
+    running: RunningEmulator[],
+    phones: AndroidPhone[],
+  ): void {
+    if (DevicePanel.instance) {
+      panel.dispose();
+      return;
+    }
+    const devicePanel = new DevicePanel(panel, environment);
+    DevicePanel.instance = devicePanel;
+    devicePanel.separateWindow = true;
+    const pending = DevicePanel.pendingWindow;
+    DevicePanel.pendingWindow = undefined;
+    if (pending) {
+      for (const device of pending.devices) {
+        if (device.kind === 'emulator') {
+          devicePanel.addEmulator(device.emulator, false);
+        } else {
+          devicePanel.addPhone(device.phone, false);
+        }
+      }
+      devicePanel.focus(pending.focus);
+    } else {
+      devicePanel.addSaved(state, running, phones);
+    }
+    devicePanel.updateTitle();
+    devicePanel.postDevices();
+    DevicePanel.updateVisibilityContext();
+  }
+
+  private addSaved(state: SavedPanelState | undefined, running: RunningEmulator[], phones: AndroidPhone[]): void {
     for (const key of state?.devices ?? []) {
       const separator = key.indexOf(':');
       const kind = key.slice(0, separator);
@@ -226,19 +292,13 @@ export class DevicePanel {
       const emulator = kind === 'emulator' ? running.find((candidate) => candidate.avdName === value) : undefined;
       const phone = kind === 'phone' ? phones.find((candidate) => candidate.serial === value) : undefined;
       if (emulator) {
-        devicePanel.addEmulator(emulator, false);
+        this.addEmulator(emulator, false);
       } else if (phone) {
-        devicePanel.addPhone(phone, false);
+        this.addPhone(phone, false);
       }
     }
-    if (devicePanel.sessions.size === 0) {
-      panel.dispose();
-      return;
-    }
-    const focused = [...devicePanel.sessions.values()].find((session) => DevicePanel.sessionKey(session) === state?.focused);
-    devicePanel.focus(focused?.id);
-    DevicePanel.updateVisibilityContext();
-    log.appendLine(`Restored Running Devices: ${[...devicePanel.sessions.values()].map((session) => session.name).join(', ')}`);
+    const focused = [...this.sessions.values()].find((session) => DevicePanel.sessionKey(session) === state?.focused);
+    this.focus(focused?.id);
   }
 
   private static sessionKey(session: Session): string {
@@ -263,11 +323,51 @@ export class DevicePanel {
   }
 
   static show(environment: PanelEnvironment, emulator: RunningEmulator): void {
-    DevicePanel.ensure(environment, emulator.avdName).addEmulator(emulator);
+    if (!DevicePanel.openingInWindow(environment, { kind: 'emulator', emulator })) {
+      DevicePanel.ensure(environment, emulator.avdName).addEmulator(emulator);
+    }
   }
 
   static showPhone(environment: PanelEnvironment, phone: AndroidPhone): void {
-    DevicePanel.ensure(environment, phone.name).addPhone(phone);
+    if (!DevicePanel.openingInWindow(environment, { kind: 'phone', phone })) {
+      DevicePanel.ensure(environment, phone.name).addPhone(phone);
+    }
+  }
+
+  private static openingInWindow(environment: PanelEnvironment, device: PendingDevice): boolean {
+    if (DevicePanel.instance || !environment.state.get<boolean>(OPEN_IN_WINDOW)) {
+      return false;
+    }
+    DevicePanel.openWindow(environment, [device]);
+    return true;
+  }
+
+  private static openWindow(environment: PanelEnvironment, devices: PendingDevice[], focus?: number): void {
+    if (DevicePanel.pendingWindow) {
+      DevicePanel.pendingWindow.devices.push(...devices);
+      return;
+    }
+    const pending = { devices: [...devices], focus };
+    DevicePanel.pendingWindow = pending;
+    const auxiliary = { bounds: environment.state.get<WindowBounds>(WINDOW_BOUNDS), compact: compactWindow() };
+    const fallBack = (reason: string) => {
+      if (DevicePanel.pendingWindow !== pending) {
+        return;
+      }
+      DevicePanel.pendingWindow = undefined;
+      log.appendLine(`Opening Running Devices in the main window: ${reason}`);
+      for (const device of pending.devices) {
+        if (device.kind === 'emulator') {
+          DevicePanel.ensure(environment, device.emulator.avdName).addEmulator(device.emulator);
+        } else {
+          DevicePanel.ensure(environment, device.phone.name).addPhone(device.phone);
+        }
+      }
+    };
+    vscode.commands.executeCommand('_workbench.openWith', WINDOW_URI, WINDOW_VIEW_TYPE, [AUX_WINDOW_GROUP, { auxiliary }]).then(
+      () => setTimeout(() => fallBack('the new window did not open'), 5000),
+      (error: Error) => fallBack(error.message),
+    );
   }
 
   static async moveToNewWindow(): Promise<void> {
@@ -275,25 +375,21 @@ export class DevicePanel {
     if (!devicePanel || devicePanel.separateWindow) {
       return;
     }
-    devicePanel.panel.reveal(undefined, false);
-    await delay(150);
-    await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
-    devicePanel.separateWindow = true;
-    devicePanel.alwaysOnTop = false;
-    devicePanel.fitPending = false;
-    devicePanel.refitOnAspect = false;
-    DevicePanel.updateVisibilityContext();
-    devicePanel.postDevices();
-    if (compactWindow()) {
-      await delay(300);
-      await vscode.commands.executeCommand('workbench.action.enableCompactAuxiliaryWindow');
-    }
+    const environment = devicePanel.environment;
+    await environment.state.update(OPEN_IN_WINDOW, true);
+    const devices = [...devicePanel.sessions.values()].map(
+      (session): PendingDevice => (session.kind === 'emulator' ? { kind: 'emulator', emulator: session.emulator } : { kind: 'phone', phone: session.phone }),
+    );
+    const focus = devicePanel.focusedId;
+    DevicePanel.hide();
+    DevicePanel.openWindow(environment, devices, focus);
   }
 
   static async moveToMainWindow(environment: PanelEnvironment, running: RunningEmulator[], phones: AndroidPhone[]): Promise<void> {
     if (!DevicePanel.instance) {
       return;
     }
+    await environment.state.update(OPEN_IN_WINDOW, false);
     DevicePanel.hide();
     await vscode.commands.executeCommand('workbench.action.switchToMainWindow');
     await delay(150);
@@ -338,6 +434,9 @@ export class DevicePanel {
         DevicePanel.showPhone(environment, phone);
       }
     }
+    if (DevicePanel.pendingWindow) {
+      DevicePanel.pendingWindow.focus = focus;
+    }
     DevicePanel.instance?.focus(focus);
     return true;
   }
@@ -375,6 +474,7 @@ export class DevicePanel {
   private keepEmulatorsRunning = false;
   private separateWindow = false;
   private alwaysOnTop = false;
+  private readonly lockedGroups = new WeakSet<vscode.TabGroup>();
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
@@ -392,8 +492,13 @@ export class DevicePanel {
         if (!webviewPanel.visible) {
           this.sessions.forEach((session) => this.pause(session));
         }
+        if (webviewPanel.active) {
+          this.lockGroup();
+        }
         DevicePanel.updateVisibilityContext();
       }),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.lockGroup()),
+      vscode.window.tabGroups.onDidChangeTabGroups((event) => void this.keepFilesLeft(event.opened)),
       panel.onDidDispose(() => this.dispose()),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('emulatorPanel.showToolbar')) {
@@ -402,6 +507,49 @@ export class DevicePanel {
         }
       }),
     );
+  }
+
+  private panelGroup(): vscode.TabGroup | undefined {
+    return vscode.window.tabGroups.all.find((candidate) =>
+      candidate.tabs.some(
+        (tab) =>
+          (tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith(DevicePanel.viewType)) ||
+          (tab.input instanceof vscode.TabInputCustom && tab.input.viewType === WINDOW_VIEW_TYPE),
+      ),
+    );
+  }
+
+  private lockGroup(): void {
+    const group = this.panelGroup();
+    if (!group || !group.isActive || !this.panel.active || group.tabs.length !== 1 || this.lockedGroups.has(group)) {
+      return;
+    }
+    this.lockedGroups.add(group);
+    void vscode.commands.executeCommand('workbench.action.lockEditorGroup');
+  }
+
+  private async keepFilesLeft(opened: readonly vscode.TabGroup[]): Promise<void> {
+    const group = this.panelGroup();
+    const added = opened.find((candidate) => candidate !== group);
+    if (
+      !group ||
+      !added ||
+      this.separateWindow ||
+      !this.lockedGroups.has(group) ||
+      vscode.window.tabGroups.all.length !== 2 ||
+      added.viewColumn <= group.viewColumn
+    ) {
+      return;
+    }
+    await delay(100);
+    if (!added.isActive) {
+      return;
+    }
+    await vscode.commands.executeCommand('workbench.action.moveActiveEditorGroupLeft');
+    if (fitEnabled()) {
+      await delay(300);
+      this.requestFit();
+    }
   }
 
   get focusedEmulator(): RunningEmulator | undefined {
@@ -570,7 +718,7 @@ export class DevicePanel {
     clearTimeout(session.restartTimer);
     this.release(session);
     this.sessions.delete(id);
-    if (this.sessions.size === 0) {
+    if (this.sessions.size === 0 && !this.separateWindow) {
       this.panel.dispose();
       return;
     }
@@ -670,6 +818,13 @@ export class DevicePanel {
       const command = PANEL_ACTION_COMMANDS[message.action];
       if (command) {
         void vscode.commands.executeCommand(command);
+      }
+      return;
+    }
+    if (message.type === 'windowBounds') {
+      if (this.separateWindow) {
+        const { x, y, width, height } = message;
+        void this.environment.state.update(WINDOW_BOUNDS, { x, y, width, height });
       }
       return;
     }
@@ -905,7 +1060,22 @@ export class DevicePanel {
     this.post({ type: 'status', id: session.id, text });
   }
 
+  private static reopenEmptyWindow(environment: PanelEnvironment): void {
+    setTimeout(() => {
+      if (!DevicePanel.instance && !DevicePanel.pendingWindow) {
+        DevicePanel.openWindow(environment, []);
+        log.appendLine('Kept the Running Devices window open after its devices were closed');
+      }
+    }, 100);
+  }
+
   private dispose(): void {
+    const keepWindow =
+      this.separateWindow &&
+      this.sessions.size > 0 &&
+      !this.keepEmulatorsRunning &&
+      stopOnClose() &&
+      !!this.environment.state.get<boolean>(OPEN_IN_WINDOW);
     const stopEmulator = stopOnClose() && !this.keepEmulatorsRunning ? DevicePanel.stopEmulator : undefined;
     for (const session of this.sessions.values()) {
       clearTimeout(session.restartTimer);
@@ -921,6 +1091,9 @@ export class DevicePanel {
       DevicePanel.updateVisibilityContext();
     }
     DevicePanel.sessionsChanged.fire();
+    if (keepWindow) {
+      DevicePanel.reopenEmptyWindow(this.environment);
+    }
   }
 
   private toolbarHtml(): string {
@@ -973,7 +1146,7 @@ export class DevicePanel {
 <div id="chips" role="tablist"></div>
 <span class="panel-actions">${this.panelActionsHtml()}</span>
 </header>
-<main id="devices"></main>
+<main id="devices"><div id="empty" hidden><p>No running devices</p><button class="start" data-panel="add">Start a device</button></div></main>
 <template id="toolbar-template">${this.toolbarHtml()}</template>
 <script nonce="${nonce}" src="${media('panel.js')}"></script>
 </body>

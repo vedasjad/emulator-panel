@@ -7,7 +7,8 @@ Run Android emulators inside VS Code, the way Android Studio's Running Devices p
 - **Device Manager** in the activity bar: every AVD with its Android version, ABI and API level, sortable by name, API or type. Run, stop, cold boot, wipe data, delete (to the Trash), reveal files or edit `config.ini`. Emulators started outside the extension are detected through adb.
 - **Running Devices** editor tab: one or more emulator screens with touch, scroll and keyboard input. Devices sit side by side when the tab is wide enough, otherwise one at a time with a switcher. The editor column resizes to fit the devices.
 - **Native extended controls**: the emulator runs with its window hidden, so the Location, Extended Controls and other panes open as the emulator's real windows.
-- **Separate window**: move Running Devices into its own compact window, keep it on top, and move it back beside your editor.
+- **Separate window**: move Running Devices into its own compact window, keep it on top, and move it back beside your editor. Once moved, it keeps opening in its own window, directly at the position and size you last left it, until you move it back. Each device in the window has its own × to stop it. The window stays open when its last device stops, with a button to start another. Closing the window with devices in it stops them and leaves the window open and empty; closing the empty window closes it.
+- **Editor groups**: files never open in the Running Devices group. When it is the only group left, a new file opens to its left.
 - **iOS simulators** in the same Device Manager: run (opens Simulator.app), stop, erase, delete, set a location, play a GPX or KML route (or one of Apple's built-in scenarios) at a chosen speed, toggle dark mode, open a URL or deep link, take a screenshot, copy the UDID. Saved points from Android Studio are offered for both platforms.
 - **Physical devices** appear in their platform's section: Android phones over USB or Wi-Fi via adb (mirror in Running Devices with touch, scroll and keyboard, screenshot, open URL, dark mode, copy serial, reboot) and paired iPhones via `devicectl` (connection state, copy UDID).
 - **Screenshots** saved to a folder and copied to the clipboard on macOS.
@@ -88,6 +89,7 @@ iOS simulators are managed with `xcrun simctl`: `list -j` for the Device Manager
 - Emulators started headless with `-no-window` can be shown but have no extended controls.
 - If Running Devices is moved to another window with VS Code's own tab menu instead of the extension's button, the window buttons do not know it moved.
 - Column fitting only applies when editor groups are side by side.
+- The separate window is opened at its saved position through VS Code's internal `_workbench.openWith` command. If a VS Code update changes that command, Running Devices opens in the main window instead and the reason is logged.
 - iOS simulator screens are not embedded in Running Devices yet; they stay in Simulator.app. Apple has no public API for streaming a simulator's screen or injecting touches.
 - Physical iPhones cannot be mirrored or controlled.
 

@@ -108,6 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionUri: context.extensionUri,
     protoDir: protoDir(),
     serverPath: vscode.Uri.joinPath(context.extensionUri, 'media', 'vendor', SCRCPY_SERVER_FILE).fsPath,
+    state: context.globalState,
   });
 
   const connectedPhones = (): AndroidPhone[] =>
@@ -131,6 +132,32 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       },
     }),
+    vscode.window.registerCustomEditorProvider(
+      DevicePanel.windowViewType,
+      {
+        openCustomDocument: (uri) => ({ uri, dispose: () => undefined }),
+        resolveCustomEditor: async (_document, panel) => {
+          try {
+            if (DevicePanel.expectingWindow) {
+              DevicePanel.adopt(panel, environment(), undefined, [], []);
+              return;
+            }
+            const phones = await listAndroidPhones(await listAdbEntries().catch(() => [])).catch(() => [] as AndroidPhone[]);
+            DevicePanel.adopt(
+              panel,
+              environment(),
+              context.workspaceState.get<SavedPanelState>(PANEL_STATE),
+              listRunning(),
+              phones.filter((phone) => phone.state === 'device'),
+            );
+          } catch (error) {
+            panel.dispose();
+            showError(error);
+          }
+        },
+      },
+      { supportsMultipleEditorsPerDocument: false },
+    ),
     DevicePanel.onDidChangeSessions(() => {
       if (!shuttingDown) {
         void context.workspaceState.update(PANEL_STATE, DevicePanel.savedState());

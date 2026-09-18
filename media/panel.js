@@ -3,6 +3,7 @@
   const container = document.getElementById('devices');
   const chips = document.getElementById('chips');
   const toolbarTemplate = document.getElementById('toolbar-template');
+  const emptyState = document.getElementById('empty');
   const GAP = 12;
   const DEFAULT_ASPECT = 9 / 20;
   const MAX_DECODE_QUEUE = 20;
@@ -367,6 +368,8 @@
           }
         }
         stopOnClose = message.stopOnClose !== false;
+        document.body.classList.toggle('empty', message.devices.length === 0);
+        emptyState.hidden = message.devices.length > 0;
         document.body.classList.toggle('in-window', !!message.separateWindow);
         for (const button of document.querySelectorAll('[data-panel="onTop"]')) {
           button.classList.toggle('pressed', !!message.alwaysOnTop);
@@ -416,6 +419,24 @@
   });
 
   new ResizeObserver(() => relayout()).observe(container);
+
+  let windowBounds;
+  let windowBoundsTimer;
+  const checkWindowBounds = () => {
+    if (!document.body.classList.contains('in-window')) {
+      windowBounds = undefined;
+      return;
+    }
+    const bounds = { x: window.screenX, y: window.screenY, width: window.outerWidth, height: window.outerHeight };
+    const key = Object.values(bounds).join();
+    if (key !== windowBounds) {
+      windowBounds = key;
+      clearTimeout(windowBoundsTimer);
+      windowBoundsTimer = setTimeout(() => post({ type: 'windowBounds', ...bounds }), 600);
+    }
+  };
+  setInterval(checkWindowBounds, 1000);
+  window.addEventListener('resize', checkWindowBounds);
 
   const forwardKey = (eventType) => (event) => {
     if (focusedId === undefined || event.metaKey || event.ctrlKey || event.isComposing || passthroughKeys.has(event.key)) {

@@ -25,9 +25,10 @@ body {
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
 }
 
-body:not(.multi):not(.no-toolbar) #header,
-body:not(.multi) #chips,
+body:not(.multi):not(.no-toolbar):not(.empty):not(.in-window) #header,
+body:not(.multi):not(.in-window) #chips,
 body.multi .toolbar .panel-actions,
+body.in-window .toolbar .panel-actions,
 body:not(.in-window) [data-panel='mainWindow'],
 body:not(.in-window) [data-panel='onTop'],
 body.in-window [data-panel='newWindow'] {
@@ -38,6 +39,10 @@ body.in-window [data-panel='newWindow'] {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+
+#header .panel-actions {
+  margin-left: auto;
 }
 
 #chips {
@@ -107,6 +112,42 @@ body.in-window [data-panel='newWindow'] {
   justify-content: center;
   gap: 12px;
   overflow: hidden;
+}
+
+#empty {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+#empty[hidden] {
+  display: none;
+}
+
+#empty p {
+  margin: 0;
+}
+
+.start {
+  padding: 4px 14px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.start:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.start:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
 }
 
 .device {

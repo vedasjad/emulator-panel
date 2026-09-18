@@ -18,9 +18,18 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onWebviewPanel:emulatorPanel.device"
+    "onWebviewPanel:emulatorPanel.device",
+    "onCustomEditor:emulatorPanel.window"
   ],
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "emulatorPanel.window",
+        "displayName": "Running Devices",
+        "selector": [{ "filenamePattern": "Running Devices" }],
+        "priority": "option"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         { "id": "emulatorPanel", "title": "Emulators", "icon": "media/activitybar.svg" }
@@ -70,11 +79,11 @@
     ],
     "menus": {
       "editor/title": [
-        { "command": "emulatorPanel.rotateLeft", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@1" },
-        { "command": "emulatorPanel.rotateRight", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@2" },
-        { "command": "emulatorPanel.screenshot", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@3" },
-        { "command": "emulatorPanel.fitColumn", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "1_device@4" },
-        { "command": "emulatorPanel.stop", "when": "activeWebviewPanelId == 'emulatorPanel.device'", "group": "2_lifecycle@1" }
+        { "command": "emulatorPanel.rotateLeft", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "1_device@1" },
+        { "command": "emulatorPanel.rotateRight", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "1_device@2" },
+        { "command": "emulatorPanel.screenshot", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "1_device@3" },
+        { "command": "emulatorPanel.fitColumn", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "1_device@4" },
+        { "command": "emulatorPanel.stop", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "2_lifecycle@1" }
       ],
       "view/title": [
         { "command": "emulatorPanel.showRunningDevices", "when": "view == emulatorPanel.devices && !emulatorPanel.runningDevicesVisible", "group": "navigation@0" },
@@ -95,24 +104,24 @@
       ]
     },
     "keybindings": [
-      { "command": "emulatorPanel.location", "key": "ctrl+shift+l", "mac": "cmd+shift+l", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.cellular", "key": "ctrl+shift+c", "mac": "cmd+shift+c", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.battery", "key": "ctrl+shift+b", "mac": "cmd+shift+b", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.virtualSensors", "key": "ctrl+shift+v", "mac": "cmd+shift+v", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.fingerprint", "key": "ctrl+shift+f", "mac": "cmd+shift+f", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.screenRecord", "key": "ctrl+shift+r", "mac": "cmd+shift+r", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.snapshots", "key": "ctrl+shift+n", "mac": "cmd+shift+n", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.settings", "key": "ctrl+shift+s", "mac": "cmd+shift+s", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.camera", "key": "ctrl+shift+a", "mac": "cmd+shift+a", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.back", "key": "ctrl+backspace", "mac": "cmd+backspace", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.home", "key": "ctrl+shift+h", "mac": "cmd+shift+h", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.overview", "key": "ctrl+o", "mac": "cmd+o", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.rotateLeft", "key": "ctrl+left", "mac": "cmd+left", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.rotateRight", "key": "ctrl+right", "mac": "cmd+right", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.volumeUp", "key": "ctrl+=", "mac": "cmd+=", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.volumeDown", "key": "ctrl+-", "mac": "cmd+-", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.power", "key": "ctrl+p", "mac": "cmd+p", "when": "activeWebviewPanelId == 'emulatorPanel.device'" },
-      { "command": "emulatorPanel.screenshot", "key": "ctrl+s", "mac": "cmd+s", "when": "activeWebviewPanelId == 'emulatorPanel.device'" }
+      { "command": "emulatorPanel.location", "key": "ctrl+shift+l", "mac": "cmd+shift+l", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.cellular", "key": "ctrl+shift+c", "mac": "cmd+shift+c", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.battery", "key": "ctrl+shift+b", "mac": "cmd+shift+b", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.virtualSensors", "key": "ctrl+shift+v", "mac": "cmd+shift+v", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.fingerprint", "key": "ctrl+shift+f", "mac": "cmd+shift+f", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.screenRecord", "key": "ctrl+shift+r", "mac": "cmd+shift+r", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.snapshots", "key": "ctrl+shift+n", "mac": "cmd+shift+n", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.settings", "key": "ctrl+shift+s", "mac": "cmd+shift+s", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.camera", "key": "ctrl+shift+a", "mac": "cmd+shift+a", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.back", "key": "ctrl+backspace", "mac": "cmd+backspace", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.home", "key": "ctrl+shift+h", "mac": "cmd+shift+h", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.overview", "key": "ctrl+o", "mac": "cmd+o", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.rotateLeft", "key": "ctrl+left", "mac": "cmd+left", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.rotateRight", "key": "ctrl+right", "mac": "cmd+right", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.volumeUp", "key": "ctrl+=", "mac": "cmd+=", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.volumeDown", "key": "ctrl+-", "mac": "cmd+-", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.power", "key": "ctrl+p", "mac": "cmd+p", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" },
+      { "command": "emulatorPanel.screenshot", "key": "ctrl+s", "mac": "cmd+s", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'" }
     ],
     "configuration": {
       "title": "Emulator Panel",
