@@ -69,7 +69,7 @@ export function listRunning(): RunningEmulator[] {
     const cmdline = ini['cmdline'] ?? '';
     emulators.push({
       pid,
-      avdName: ini['avd.name'] ?? ini['avd.id'] ?? `emulator-${ini['port.serial']}`,
+      avdName: ini['avd.id'] ?? ini['avd.name'] ?? `emulator-${ini['port.serial']}`,
       grpcPort,
       token: ini['grpc.token'] || undefined,
       consolePort: Number(ini['port.serial']),
