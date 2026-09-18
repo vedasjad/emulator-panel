@@ -20,6 +20,9 @@ function decodeProto(buffer: Buffer): ProtoFields {
     let result = 0;
     let shift = 0;
     for (;;) {
+      if (offset >= buffer.length) {
+        throw new RangeError('The point file ends inside a number.');
+      }
       const byte = buffer[offset++];
       result += (byte & 0x7f) * 2 ** shift;
       shift += 7;

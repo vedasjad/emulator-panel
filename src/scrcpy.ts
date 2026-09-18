@@ -31,6 +31,12 @@ export interface ScrcpyRecord {
   port: number;
 }
 
+export interface MirrorOptions {
+  maxSize: number;
+  maxFps: number;
+  bitRate: number;
+}
+
 export interface ScrcpyHandlers {
   onSession(width: number, height: number): void;
   onPacket(kind: VideoPacketKind, pts: number, data: Buffer): void;
@@ -127,7 +133,7 @@ export class ScrcpyConnection {
     private readonly handlers: ScrcpyHandlers,
   ) {}
 
-  async start(maxSize: number): Promise<void> {
+  async start(options: MirrorOptions): Promise<void> {
     await adb(['-s', this.serial, 'push', this.serverPath, DEVICE_SERVER_PATH], 60_000);
     const scid = crypto.randomInt(1, 0x7fffffff).toString(16).padStart(8, '0');
     this.scid = scid;
@@ -154,9 +160,9 @@ export class ScrcpyConnection {
       'log_level=info',
       'audio=false',
       'video_codec=h264',
-      `max_size=${maxSize}`,
-      'max_fps=60',
-      'video_bit_rate=8000000',
+      `max_size=${options.maxSize}`,
+      `max_fps=${options.maxFps}`,
+      `video_bit_rate=${options.bitRate}`,
       'tunnel_forward=true',
       'clipboard_autosync=false',
     ]);

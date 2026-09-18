@@ -28,7 +28,7 @@ export type DeviceAction =
   | 'reboot'
   | 'hideScreen';
 
-type ViewMessage = { type: 'ready' } | { type: 'action'; action: DeviceAction; id: string };
+type ViewMessage = { type: 'ready' } | { type: 'openSdkSetting' } | { type: 'action'; action: DeviceAction; id: string };
 
 function describe(device: Device, mirrored: Set<string>) {
   const common = { id: device.id, platform: device.platform, status: device.status, physical: false, mirrored: false };
@@ -127,6 +127,8 @@ export class DevicesViewProvider implements vscode.WebviewViewProvider {
       if (message.type === 'ready') {
         this.post(this.store.current);
         void this.store.refresh();
+      } else if (message.type === 'openSdkSetting') {
+        void vscode.commands.executeCommand('workbench.action.openSettings', 'emulatorPanel.sdkPath');
       } else if (message.type === 'action') {
         const device = this.store.find(message.id);
         if (device) {
@@ -149,7 +151,11 @@ export class DevicesViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const mirrored = DevicePanel.mirroredSerials();
-    void this.view.webview.postMessage({ type: 'devices', devices: devices.map((device) => describe(device, mirrored)) });
+    void this.view.webview.postMessage({
+      type: 'devices',
+      devices: devices.map((device) => describe(device, mirrored)),
+      sdkProblem: this.store.sdkProblem,
+    });
   }
 
   private html(webview: vscode.Webview): string {

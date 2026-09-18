@@ -4,7 +4,7 @@ import { RunningEmulator } from './discovery';
 import { EmulatorClient, Frame, KeyEventType, Pane, Rotation } from './emulatorClient';
 import { log } from './log';
 import { AndroidPhone, androidScreenshot } from './physicalDevices';
-import { ScrcpyConnection } from './scrcpy';
+import { MirrorOptions, ScrcpyConnection } from './scrcpy';
 
 const ROTATION_QUADRANT: Record<Rotation, number> = {
   PORTRAIT: 0,
@@ -38,7 +38,6 @@ const TYPED_KEYCODES: Record<string, number> = {
   PageDown: 93,
 };
 
-const PHONE_MAX_SIZE = 1920;
 const MIN_NEIGHBOR_WIDTH = 220;
 
 const mac = process.platform === 'darwin';
@@ -161,8 +160,18 @@ type WebviewMessage =
   | { type: 'wheel'; id: number; u: number; v: number; dx: number; dy: number }
   | { type: 'key'; id: number; key: string; eventType: KeyEventType };
 
+const TOOL_COMMANDS = new Set(TOOL_GROUPS.flat().map((tool) => tool.command));
+
 const settings = () => vscode.workspace.getConfiguration('emulatorPanel');
 const fitEnabled = () => settings().get<boolean>('fitColumnOnOpen', true);
+const keepWidthEnabled = () => settings().get<boolean>('keepColumnWidth', true);
+const bounded = (value: number | undefined, fallback: number, min: number, max: number) =>
+  Number.isFinite(value) ? Math.min(Math.max(value as number, min), max) : fallback;
+const mirrorOptions = (): MirrorOptions => ({
+  maxSize: Math.round(bounded(settings().get<number>('mirroring.maxSize'), 1920, 0, 8192)),
+  maxFps: Math.round(bounded(settings().get<number>('mirroring.maxFps'), 60, 1, 120)),
+  bitRate: Math.round(bounded(settings().get<number>('mirroring.bitRate'), 8, 1, 50) * 1_000_000),
+});
 const stopOnClose = () => settings().get<boolean>('stopOnClose', true);
 const compactWindow = () => settings().get<boolean>('compactWindow', true);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -696,7 +705,7 @@ export class DevicePanel {
       };
       this.sessions.set(id, session);
       const started = session;
-      connection.start(PHONE_MAX_SIZE).catch((error: Error) => {
+      connection.start(mirrorOptions()).catch((error: Error) => {
         log.appendLine(`Could not mirror ${phone.name}: ${error.message}`);
         if (this.sessions.get(id) === started) {
           this.status(started, `Could not mirror ${phone.name}: ${error.message}`);
@@ -839,7 +848,7 @@ export class DevicePanel {
           this.refitOnAspect = false;
         }
         this.fitColumn(message.width, message.needed).catch((error: Error) => log.appendLine(`Fit failed: ${error.message}`));
-      } else if (message.reason === 'resize') {
+      } else if (message.reason === 'resize' && keepWidthEnabled()) {
         this.keepColumnWidth().catch((error: Error) => log.appendLine(`Keeping the column width failed: ${error.message}`));
       }
       return;
@@ -858,7 +867,9 @@ export class DevicePanel {
         return;
       case 'command':
         this.focusedId = message.id;
-        void vscode.commands.executeCommand(message.command);
+        if (TOOL_COMMANDS.has(message.command)) {
+          void vscode.commands.executeCommand(message.command);
+        }
         return;
     }
     if (session.kind === 'phone') {

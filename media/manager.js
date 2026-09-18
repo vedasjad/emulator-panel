@@ -6,6 +6,7 @@
   let direction = saved.direction || 1;
   const collapsed = new Set(saved.collapsed || []);
   let devices = [];
+  let sdkProblem;
   let menu;
 
   const SECTIONS = [
@@ -105,12 +106,15 @@
   }
 
   function render() {
+    const notice = sdkProblem
+      ? `<div class="notice"><p>${escapeHtml(sdkProblem)}</p><button class="notice-button" data-open-sdk-setting>Set Android SDK Path</button></div>`
+      : '';
     if (devices.length === 0) {
-      root.innerHTML = `<div class="empty">No Android Virtual Devices or iOS simulators were found.<br>Create one in Android Studio's Device Manager or Xcode.</div>`;
+      root.innerHTML = `${notice}<div class="empty">No devices were found.<br>Create an Android Virtual Device in Android Studio's Device Manager, or a simulator in Xcode.</div>`;
       return;
     }
     const sorted = sortedDevices();
-    root.innerHTML = SECTIONS.map((section) => {
+    root.innerHTML = notice + SECTIONS.map((section) => {
       const list = sorted.filter((device) => device.platform === section.platform);
       if (list.length === 0) {
         return '';
@@ -270,6 +274,10 @@
   }
 
   root.addEventListener('click', (event) => {
+    if (event.target.closest('[data-open-sdk-setting]')) {
+      vscode.postMessage({ type: 'openSdkSetting' });
+      return;
+    }
     const sectionButton = event.target.closest('[data-section]');
     if (sectionButton) {
       const platform = sectionButton.dataset.section;
@@ -367,6 +375,7 @@
   window.addEventListener('message', (event) => {
     if (event.data.type === 'devices') {
       devices = event.data.devices;
+      sdkProblem = event.data.sdkProblem;
       render();
     }
   });

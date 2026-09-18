@@ -24,7 +24,7 @@ import {
   setAndroidNightMode,
 } from './physicalDevices';
 import { SCRCPY_SERVER_FILE, ScrcpyConnection, ScrcpyRecord } from './scrcpy';
-import { adbPath, protoDir } from './sdk';
+import { adbPath, expandHome, protoDir } from './sdk';
 import {
   SimulatorInfo,
   bootSimulator,
@@ -77,6 +77,10 @@ function showError(error: unknown): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  if (process.platform !== 'darwin') {
+    void vscode.window.showErrorMessage('Emulator Panel supports macOS only for now.');
+    return;
+  }
   context.subscriptions.push(log);
   void ScrcpyConnection.cleanup(context.workspaceState.get<ScrcpyRecord[]>(SCRCPY_SESSIONS, []));
   ScrcpyConnection.onRecordsChanged = (records) => void context.workspaceState.update(SCRCPY_SESSIONS, records);
@@ -520,7 +524,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register('emulatorPanel.toggleAlwaysOnTop', () => DevicePanel.current?.toggleAlwaysOnTop());
 
   register('emulatorPanel.refreshDevices', () => store.refresh());
-  register('emulatorPanel.openSettings', () => vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local.emulator-panel'));
+  register('emulatorPanel.openSettings', () => vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`));
   register('emulatorPanel.showLog', () => log.show());
   register('emulatorPanel.openAvdFolder', () => vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(avdHome())));
   register('emulatorPanel.stopAll', async () => {
@@ -601,8 +605,11 @@ async function withClient<T>(emulator: RunningEmulator, action: (client: Emulato
 }
 
 async function saveScreenshot(png: Buffer): Promise<void> {
-  const configured = vscode.workspace.getConfiguration('emulatorPanel').get<string>('screenshotFolder');
-  const folder = configured ? configured.replace(/^~(?=$|[\\/])/, os.homedir()) : path.join(os.homedir(), 'Desktop');
+  const configured = vscode.workspace.getConfiguration('emulatorPanel').get<string>('screenshotFolder')?.trim();
+  let folder = configured ? expandHome(configured) : path.join(os.homedir(), 'Desktop');
+  if (!path.isAbsolute(folder)) {
+    folder = path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir(), folder);
+  }
   const file = path.join(folder, `Screenshot_${Math.floor(Date.now() / 1000)}.png`);
   await fs.promises.mkdir(folder, { recursive: true });
   await fs.promises.writeFile(file, png);

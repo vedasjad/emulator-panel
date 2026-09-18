@@ -4,4 +4,7 @@ node_modules/**
 esbuild.js
 tsconfig.json
 .gitignore
+.github/**
+.vscode/**
+CLAUDE.md
 *.vsix

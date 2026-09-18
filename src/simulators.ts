@@ -20,17 +20,24 @@ export interface Coordinate {
 
 export const simulatorsSupported = process.platform === 'darwin';
 
-function simctl(args: string[], input?: string): Promise<Buffer> {
+function simctl(args: string[], input?: string, timeoutMs = 120_000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn('xcrun', ['simctl', ...args]);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const timer = setTimeout(() => child.kill(), timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
-    child.on('error', reject);
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (code === 0) {
         resolve(Buffer.concat(stdout));
+      } else if (code === null) {
+        reject(new Error(`simctl ${args[0]} did not finish within ${Math.round(timeoutMs / 1000)} seconds.`));
       } else {
         const message = Buffer.concat(stderr).toString().trim().split('\n').pop();
         reject(new Error(message || `simctl ${args[0]} exited with code ${code}`));
@@ -44,7 +51,7 @@ export async function listSimulators(): Promise<SimulatorInfo[]> {
   if (!simulatorsSupported) {
     return [];
   }
-  const data = JSON.parse((await simctl(['list', '-j'])).toString());
+  const data = JSON.parse((await simctl(['list', '-j'], undefined, 20_000)).toString());
   const runtimes = new Map<string, { name: string; version: string }>(
     (data.runtimes ?? []).map((runtime: any) => [runtime.identifier, { name: runtime.name, version: runtime.version }]),
   );

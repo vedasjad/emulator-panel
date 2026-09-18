@@ -300,3 +300,29 @@ body {
   line-height: 1.5;
   color: var(--vscode-descriptionForeground);
 }
+
+.notice {
+  margin: 8px 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
+  background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.1));
+  line-height: 1.45;
+}
+
+.notice p {
+  margin: 0 0 8px;
+}
+
+.notice-button {
+  padding: 3px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.notice-button:hover {
+  background: var(--vscode-button-hoverBackground);
+}

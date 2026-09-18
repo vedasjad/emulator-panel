@@ -1,6 +1,7 @@
 const esbuild = require('esbuild');
 
 const watch = process.argv.includes('--watch');
+const production = process.argv.includes('--production');
 
 const options = {
   entryPoints: ['src/extension.ts'],
@@ -10,7 +11,8 @@ const options = {
   target: 'node20',
   format: 'cjs',
   external: ['vscode'],
-  sourcemap: true,
+  minify: production,
+  sourcemap: !production,
   logLevel: 'info',
 };
 

@@ -61,6 +61,8 @@ export class DeviceStore implements vscode.Disposable {
   private reloadQueued = false;
   private pollTimer: NodeJS.Timeout | undefined;
   private debounceTimer: NodeJS.Timeout | undefined;
+  private readonly configListener: vscode.Disposable;
+  private sdkError: string | undefined;
 
   constructor(private readonly shouldPoll: () => boolean) {
     const dirs = [discoveryDir(), avdHome()];
@@ -74,11 +76,20 @@ export class DeviceStore implements vscode.Disposable {
         continue;
       }
     }
+    this.configListener = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('emulatorPanel')) {
+        this.refreshSoon();
+      }
+    });
     void this.refresh();
   }
 
   get current(): Device[] {
     return this.devices;
+  }
+
+  get sdkProblem(): string | undefined {
+    return this.sdkError;
   }
 
   find(id: string): Device | undefined {
@@ -129,6 +140,7 @@ export class DeviceStore implements vscode.Disposable {
     clearTimeout(this.pollTimer);
     clearTimeout(this.debounceTimer);
     this.watchers.forEach((watcher) => watcher.close());
+    this.configListener.dispose();
     this.changed.dispose();
   }
 
@@ -170,17 +182,22 @@ export class DeviceStore implements vscode.Disposable {
     let root: string | undefined;
     try {
       root = sdkRoot();
-    } catch {
+      this.sdkError = undefined;
+    } catch (error) {
       root = undefined;
+      this.sdkError = error instanceof Error ? error.message : String(error);
     }
+    const config = vscode.workspace.getConfiguration('emulatorPanel');
+    const showIos = simulatorsSupported && config.get<boolean>('showIosDevices', true);
+    const showPhysical = config.get<boolean>('showPhysicalDevices', true);
     const running = listRunning();
     const serialOf = (emulator: RunningEmulator) => `emulator-${emulator.consolePort}`;
-    const entries = await listAdbEntries().catch(() => [] as AdbEntry[]);
+    const entries = root ? await listAdbEntries().catch(() => [] as AdbEntry[]) : [];
     const [external, simulators, androidPhones, iosPhones] = await Promise.all([
       externalEmulators(entries, new Set(running.map(serialOf))).catch(() => new Map<string, string>()),
-      listSimulators().catch(() => [] as SimulatorInfo[]),
-      listAndroidPhones(entries).catch(() => [] as AndroidPhone[]),
-      listIosPhones().catch(() => [] as IosPhone[]),
+      showIos ? listSimulators().catch(() => [] as SimulatorInfo[]) : [],
+      showPhysical ? listAndroidPhones(entries).catch(() => [] as AndroidPhone[]) : [],
+      showIos && showPhysical ? listIosPhones().catch(() => [] as IosPhone[]) : [],
     ]);
 
     const emulators: Device[] = readAvds(root).map((avd) => {
