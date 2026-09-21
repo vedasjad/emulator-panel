@@ -12,6 +12,7 @@
   const cells = new Map();
   let order = [];
   let focusedId;
+  const heldKeys = new Map();
   let needed = 0;
   let stopOnClose = true;
 
@@ -444,6 +445,15 @@
   window.addEventListener('resize', checkWindowBounds);
 
   const forwardKey = (eventType) => (event) => {
+    const held = heldKeys.get(event.code);
+    if (eventType === 'keyup' && held) {
+      // Sent even with Cmd/Ctrl down now (Shift, then Cmd+P, then letting go
+      // of Shift), or the emulator keeps the key pressed.
+      event.preventDefault();
+      heldKeys.delete(event.code);
+      post({ type: 'key', id: held.id, key: held.key, eventType: 'keyup' });
+      return;
+    }
     if (focusedId === undefined || event.metaKey || event.ctrlKey || event.isComposing || passthroughKeys.has(event.key)) {
       return;
     }
@@ -451,10 +461,37 @@
       return;
     }
     event.preventDefault();
+    if (event.key === 'CapsLock') {
+      // macOS reports Caps Lock as a keydown when it turns on and a keyup when
+      // it turns off, while Android toggles once per press.
+      post({ type: 'key', id: focusedId, key: 'CapsLock', eventType: 'keydown' });
+      post({ type: 'key', id: focusedId, key: 'CapsLock', eventType: 'keyup' });
+      return;
+    }
+    if (eventType === 'keydown') {
+      heldKeys.set(event.code, { id: focusedId, key: event.key });
+    } else {
+      heldKeys.delete(event.code);
+    }
     post({ type: 'key', id: focusedId, key: event.key, eventType });
   };
   window.addEventListener('keydown', forwardKey('keydown'));
   window.addEventListener('keyup', forwardKey('keyup'));
+
+  // A key still down when focus leaves the webview never gets its keyup, and a
+  // stuck Alt turns every later letter into a shortcut the text field ignores.
+  const releaseHeldKeys = () => {
+    for (const { id, key } of heldKeys.values()) {
+      post({ type: 'key', id, key, eventType: 'keyup' });
+    }
+    heldKeys.clear();
+  };
+  window.addEventListener('blur', releaseHeldKeys);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      releaseHeldKeys();
+    }
+  });
 
   document.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-panel]');
