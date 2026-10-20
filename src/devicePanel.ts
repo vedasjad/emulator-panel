@@ -135,6 +135,8 @@ interface PhoneSession extends SessionBase {
 
 type Session = EmulatorSession | PhoneSession;
 
+type EditAction = 'selectAll' | 'copy' | 'cut' | 'paste';
+
 type PanelAction = 'add' | 'newWindow' | 'mainWindow' | 'onTop';
 
 const PANEL_ACTION_COMMANDS: Record<PanelAction, string> = {
@@ -158,7 +160,8 @@ type WebviewMessage =
   | { type: 'videoStarted'; id: number; width: number; height: number }
   | { type: 'pointer'; id: number; phase: 'down' | 'move' | 'up'; pointer: number; u: number; v: number }
   | { type: 'wheel'; id: number; u: number; v: number; dx: number; dy: number }
-  | { type: 'key'; id: number; key: string; eventType: KeyEventType };
+  | { type: 'key'; id: number; key: string; eventType: KeyEventType }
+  | { type: 'edit'; id: number; action: EditAction };
 
 const TOOL_COMMANDS = new Set(TOOL_GROUPS.flat().map((tool) => tool.command));
 
@@ -871,11 +874,40 @@ export class DevicePanel {
           void vscode.commands.executeCommand(message.command);
         }
         return;
+      case 'edit':
+        this.edit(session, message.action).catch((error: Error) =>
+          log.appendLine(`[${session.name}] ${message.action} failed: ${error.message}`),
+        );
+        return;
     }
     if (session.kind === 'phone') {
       this.onPhoneMessage(session, message);
     } else {
       this.onEmulatorMessage(session, message);
+    }
+  }
+
+  private async edit(session: Session, action: EditAction): Promise<void> {
+    const device = session.kind === 'phone' ? session.connection : session.client;
+    switch (action) {
+      case 'selectAll':
+        device.selectAll();
+        return;
+      case 'paste': {
+        const text = await vscode.env.clipboard.readText();
+        if (text) {
+          await device.paste(text);
+        }
+        return;
+      }
+      case 'copy':
+      case 'cut': {
+        const text = await device.copy(action === 'cut');
+        if (text !== undefined) {
+          await vscode.env.clipboard.writeText(text);
+        }
+        return;
+      }
     }
   }
 

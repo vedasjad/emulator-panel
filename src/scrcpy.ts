@@ -12,12 +12,27 @@ const CODEC_H264 = 0x68323634;
 const FLAG_CONFIG = 1n << 62n;
 const FLAG_KEY_FRAME = 1n << 61n;
 const PTS_MASK = FLAG_KEY_FRAME - 1n;
+const CLIPBOARD_TEXT_MAX_BYTES = (1 << 18) - 14;
+const KEYCODE_A = 29;
+const KEYCODE_C = 31;
+const KEYCODE_V = 50;
+const KEYCODE_X = 52;
+const KEYCODE_CTRL_LEFT = 113;
+const META_CTRL_LEFT_ON = 0x3000;
+const COPY_TIMEOUT_MS = 1500;
+
+const DEVICE_MESSAGE = {
+  clipboard: 0,
+  ackClipboard: 1,
+  uhidOutput: 2,
+};
 
 const MESSAGE = {
   injectKeycode: 0,
   injectText: 1,
   injectTouch: 2,
   injectScroll: 3,
+  setClipboard: 9,
   rotateDevice: 11,
   resetVideo: 17,
 };
@@ -123,6 +138,8 @@ export class ScrcpyConnection {
   private port: number | undefined;
   private scid: string | undefined;
   private closed = false;
+  private deviceMessages = Buffer.alloc(0);
+  private onClipboard: ((text: string | undefined) => void) | undefined;
   private readonly queue = new ByteQueue();
   private stage: 'name' | 'codec' | 'header' | 'body' = 'name';
   private pending: { flags: bigint; size: number } | undefined;
@@ -164,7 +181,6 @@ export class ScrcpyConnection {
       `max_fps=${options.maxFps}`,
       `video_bit_rate=${options.bitRate}`,
       'tunnel_forward=true',
-      'clipboard_autosync=false',
     ]);
     const log = (chunk: Buffer) =>
       chunk
@@ -183,7 +199,7 @@ export class ScrcpyConnection {
       this.close();
       throw error;
     }
-    this.control.on('data', () => undefined);
+    this.control.on('data', (chunk: Buffer) => this.onDeviceMessages(chunk));
     this.control.on('error', (error) => this.fail(error));
     this.control.on('close', () => this.fail());
   }
@@ -220,11 +236,12 @@ export class ScrcpyConnection {
     this.send(buffer);
   }
 
-  key(phase: 'down' | 'up', keycode: number): void {
+  key(phase: 'down' | 'up', keycode: number, metaState = 0): void {
     const buffer = Buffer.alloc(14);
     buffer[0] = MESSAGE.injectKeycode;
     buffer[1] = phase === 'down' ? 0 : 1;
     buffer.writeUInt32BE(keycode, 2);
+    buffer.writeUInt32BE(metaState, 10);
     this.send(buffer);
   }
 
@@ -240,6 +257,73 @@ export class ScrcpyConnection {
     buffer.writeUInt32BE(bytes.length, 1);
     bytes.copy(buffer, 5);
     this.send(buffer);
+  }
+
+  // The server's paste flag and copy keys press KEYCODE_PASTE/COPY/CUT, which
+  // Flutter text fields ignore, so Ctrl shortcuts do the editing.
+  private ctrl(keycode: number): void {
+    this.key('down', KEYCODE_CTRL_LEFT, META_CTRL_LEFT_ON);
+    this.key('down', keycode, META_CTRL_LEFT_ON);
+    this.key('up', keycode, META_CTRL_LEFT_ON);
+    this.key('up', KEYCODE_CTRL_LEFT);
+  }
+
+  selectAll(): void {
+    this.ctrl(KEYCODE_A);
+  }
+
+  paste(text: string): void {
+    const bytes = Buffer.from(text, 'utf8').subarray(0, CLIPBOARD_TEXT_MAX_BYTES);
+    const buffer = Buffer.alloc(14 + bytes.length);
+    buffer[0] = MESSAGE.setClipboard;
+    buffer.writeUInt32BE(bytes.length, 10);
+    bytes.copy(buffer, 14);
+    this.send(buffer);
+    this.ctrl(KEYCODE_V);
+  }
+
+  // Clipboard autosync pushes the device clipboard whenever it changes; the
+  // first push after the shortcut is the copy.
+  copy(cut: boolean): Promise<string | undefined> {
+    this.onClipboard?.(undefined);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.onClipboard?.(undefined), COPY_TIMEOUT_MS);
+      this.onClipboard = (text) => {
+        clearTimeout(timer);
+        this.onClipboard = undefined;
+        resolve(text);
+      };
+      this.ctrl(cut ? KEYCODE_X : KEYCODE_C);
+    });
+  }
+
+  private onDeviceMessages(chunk: Buffer): void {
+    this.deviceMessages = Buffer.concat([this.deviceMessages, chunk]);
+    while (this.deviceMessages.length) {
+      const pending = this.deviceMessages;
+      let size: number;
+      switch (pending[0]) {
+        case DEVICE_MESSAGE.clipboard:
+          size = pending.length < 5 ? Infinity : 5 + pending.readUInt32BE(1);
+          break;
+        case DEVICE_MESSAGE.ackClipboard:
+          size = 9;
+          break;
+        case DEVICE_MESSAGE.uhidOutput:
+          size = pending.length < 5 ? Infinity : 5 + pending.readUInt16BE(3);
+          break;
+        default:
+          this.deviceMessages = Buffer.alloc(0);
+          return;
+      }
+      if (pending.length < size) {
+        return;
+      }
+      if (pending[0] === DEVICE_MESSAGE.clipboard) {
+        this.onClipboard?.(pending.toString('utf8', 5, size));
+      }
+      this.deviceMessages = pending.subarray(size);
+    }
   }
 
   rotate(): void {

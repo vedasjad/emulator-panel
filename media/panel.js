@@ -444,6 +444,8 @@
   setInterval(checkWindowBounds, 1000);
   window.addEventListener('resize', checkWindowBounds);
 
+  const EDIT_ACTIONS = { a: 'selectAll', c: 'copy', v: 'paste', x: 'cut' };
+
   const forwardKey = (eventType) => (event) => {
     const held = heldKeys.get(event.code);
     if (eventType === 'keyup' && held) {
@@ -452,6 +454,11 @@
       event.preventDefault();
       heldKeys.delete(event.code);
       post({ type: 'key', id: held.id, key: held.key, eventType: 'keyup' });
+      return;
+    }
+    const editAction = EDIT_ACTIONS[event.key.toLowerCase()];
+    if (eventType === 'keydown' && focusedId !== undefined && editAction && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && !event.repeat) {
+      post({ type: 'edit', id: focusedId, action: editAction });
       return;
     }
     if (focusedId === undefined || event.metaKey || event.ctrlKey || event.isComposing || passthroughKeys.has(event.key)) {

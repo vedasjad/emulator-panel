@@ -58,6 +58,8 @@ Active while Running Devices is focused. Change them in **Preferences: Open Keyb
 
 Phone has no shortcut so that `Cmd+Shift+P` keeps opening the Command Palette; use **Emulator: Phone** instead.
 
+`Cmd+A`, `Cmd+C`, `Cmd+X` and `Cmd+V` select all, copy, cut and paste in the focused device, through the Mac clipboard. They work in Flutter text fields too, and can't be rebound.
+
 ## Settings
 
 | Setting | Default | Description |

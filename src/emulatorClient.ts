@@ -27,6 +27,9 @@ export interface Frame {
   rotation: Rotation;
 }
 
+const PASTE_DELAY_MS = 150;
+const COPY_TIMEOUT_MS = 1500;
+
 const packages = new Map<string, any>();
 
 function controlPackage(protoDir: string): any {
@@ -150,6 +153,47 @@ export class EmulatorClient {
 
   key(key: string, eventType: KeyEventType = 'keypress'): void {
     this.send({ key_event: { key, eventType } });
+  }
+
+  // Ctrl shortcuts rather than the Cut/Copy/Paste keys, which Flutter text
+  // fields ignore.
+  private ctrl(key: string): void {
+    this.key('Control', 'keydown');
+    this.key(key, 'keypress');
+    this.key('Control', 'keyup');
+  }
+
+  selectAll(): void {
+    this.ctrl('a');
+  }
+
+  async paste(text: string): Promise<void> {
+    await this.unary(this.controller, 'setClipboard', { text });
+    await new Promise((resolve) => setTimeout(resolve, PASTE_DELAY_MS));
+    this.ctrl('v');
+  }
+
+  // The stream opens with the current clipboard; the next update is the copy.
+  copy(cut: boolean): Promise<string | undefined> {
+    const call = this.controller.streamClipboard({}, this.metadata);
+    return new Promise<string | undefined>((resolve) => {
+      let sent = false;
+      const finish = (text?: string) => {
+        clearTimeout(timer);
+        call.cancel();
+        resolve(text);
+      };
+      const timer = setTimeout(() => finish(), COPY_TIMEOUT_MS);
+      call.on('data', (clip: { text: string }) => {
+        if (sent) {
+          finish(clip.text);
+          return;
+        }
+        sent = true;
+        this.ctrl(cut ? 'x' : 'c');
+      });
+      call.on('error', () => finish());
+    });
   }
 
   async setRotation(quadrants: number): Promise<void> {
