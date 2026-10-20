@@ -25,6 +25,8 @@ Run Android emulators inside VS Code, the way Android Studio's Running Devices p
 
 ## Getting started
 
+Install **Emulator Panel** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=vedasjad.emulator-panel), or run `code --install-extension vedasjad.emulator-panel`.
+
 1. Open the **Emulators** view in the activity bar.
 2. Press ▶ next to an AVD. It starts with its window hidden and opens in the Running Devices tab.
 3. Use `+` in Running Devices to add another emulator or a connected phone.
