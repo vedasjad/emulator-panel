@@ -2,7 +2,7 @@
   "name": "emulator-panel",
   "displayName": "Emulator Panel: Android Emulator & Phone Mirroring",
   "description": "Run Android emulators and mirror Android phones inside VS Code, keeping the emulator's own extended controls. Manage iOS simulators from the same Device Manager.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "vedasjad",
   "author": { "name": "vedasjad" },
   "license": "MIT",
