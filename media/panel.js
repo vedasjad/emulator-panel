@@ -208,6 +208,40 @@
       { passive: false },
     );
 
+    canvas.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      post({ type: 'command', id, command: 'emulatorPanel.back' });
+    });
+
+    cell.section.addEventListener('dragover', (event) => {
+      if (carriesFiles(event)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    cell.section.addEventListener('drop', async (event) => {
+      if (!carriesFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      const uris = event.dataTransfer
+        .getData('text/uri-list')
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('file:'));
+      if (uris.length) {
+        post({ type: 'drop', id, uris });
+        return;
+      }
+      const files = [...event.dataTransfer.files];
+      if (files.length) {
+        post({
+          type: 'dropFiles',
+          id,
+          files: await Promise.all(files.map(async (file) => ({ name: file.name, data: new Uint8Array(await file.arrayBuffer()) }))),
+        });
+      }
+    });
+
     cell.observer = new ResizeObserver(() => {
       layoutCanvas(cell);
       fitToolbar(cell);
@@ -445,6 +479,14 @@
   window.addEventListener('resize', checkWindowBounds);
 
   const EDIT_ACTIONS = { a: 'selectAll', c: 'copy', v: 'paste', x: 'cut' };
+
+  // VS Code takes over a file drag unless its dragenter is cancelled first.
+  const carriesFiles = (event) => !!event.dataTransfer?.types.some((type) => type === 'Files' || type === 'text/uri-list');
+  document.addEventListener('dragenter', (event) => {
+    if (carriesFiles(event)) {
+      event.preventDefault();
+    }
+  });
 
   const forwardKey = (eventType) => (event) => {
     const held = heldKeys.get(event.code);

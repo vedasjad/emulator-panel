@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Install APKs by dragging them from the Explorer or Finder onto Running Devices, from the Explorer's context menu, or with **Emulator: Install APK on Device**. Other files dragged from Finder are copied to the device's Downloads folder.
+- Right-clicking a device screen presses Back.
+- Mirrored phones stay awake while plugged in (`emulatorPanel.mirroring.stayAwake`).
+- Listed under Debuggers and Visualization as well as Testing, with a display name that says what it does.
+
 ## 0.1.0
 
 First public preview. macOS only.

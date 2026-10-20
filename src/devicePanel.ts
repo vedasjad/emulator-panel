@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { RunningEmulator } from './discovery';
 import { EmulatorClient, Frame, KeyEventType, Pane, Rotation } from './emulatorClient';
+import { AdbTarget, sendFileContents, sendFiles } from './install';
 import { log } from './log';
 import { AndroidPhone, androidScreenshot } from './physicalDevices';
 import { MirrorOptions, ScrcpyConnection } from './scrcpy';
@@ -137,6 +138,11 @@ type Session = EmulatorSession | PhoneSession;
 
 type EditAction = 'selectAll' | 'copy' | 'cut' | 'paste';
 
+const adbTarget = (session: Session): AdbTarget =>
+  session.kind === 'phone'
+    ? { name: session.name, serial: session.phone.serial }
+    : { name: session.name, serial: `emulator-${session.emulator.consolePort}` };
+
 type PanelAction = 'add' | 'newWindow' | 'mainWindow' | 'onTop';
 
 const PANEL_ACTION_COMMANDS: Record<PanelAction, string> = {
@@ -161,7 +167,9 @@ type WebviewMessage =
   | { type: 'pointer'; id: number; phase: 'down' | 'move' | 'up'; pointer: number; u: number; v: number }
   | { type: 'wheel'; id: number; u: number; v: number; dx: number; dy: number }
   | { type: 'key'; id: number; key: string; eventType: KeyEventType }
-  | { type: 'edit'; id: number; action: EditAction };
+  | { type: 'edit'; id: number; action: EditAction }
+  | { type: 'drop'; id: number; uris: string[] }
+  | { type: 'dropFiles'; id: number; files: { name: string; data: Uint8Array }[] };
 
 const TOOL_COMMANDS = new Set(TOOL_GROUPS.flat().map((tool) => tool.command));
 
@@ -174,6 +182,7 @@ const mirrorOptions = (): MirrorOptions => ({
   maxSize: Math.round(bounded(settings().get<number>('mirroring.maxSize'), 1920, 0, 8192)),
   maxFps: Math.round(bounded(settings().get<number>('mirroring.maxFps'), 60, 1, 120)),
   bitRate: Math.round(bounded(settings().get<number>('mirroring.bitRate'), 8, 1, 50) * 1_000_000),
+  stayAwake: settings().get<boolean>('mirroring.stayAwake', true),
 });
 const stopOnClose = () => settings().get<boolean>('stopOnClose', true);
 const compactWindow = () => settings().get<boolean>('compactWindow', true);
@@ -510,7 +519,10 @@ export class DevicePanel {
         }
         DevicePanel.updateVisibilityContext();
       }),
-      vscode.window.tabGroups.onDidChangeTabs(() => this.lockGroup()),
+      vscode.window.tabGroups.onDidChangeTabs((event) => {
+        this.lockGroup();
+        this.installDroppedApks(event.opened);
+      }),
       vscode.window.tabGroups.onDidChangeTabGroups((event) => void this.keepFilesLeft(event.opened)),
       panel.onDidDispose(() => this.dispose()),
       vscode.workspace.onDidChangeConfiguration((event) => {
@@ -539,6 +551,24 @@ export class DevicePanel {
     }
     this.lockedGroups.add(group);
     void vscode.commands.executeCommand('workbench.action.lockEditorGroup');
+  }
+
+  // A drag from the Explorer never reaches the webview: VS Code opens the file
+  // in the group it was dropped on, so an APK that lands here gets installed.
+  private installDroppedApks(opened: readonly vscode.Tab[]): void {
+    const group = this.panelGroup();
+    const target = this.focusedTarget();
+    if (!group || !target) {
+      return;
+    }
+    for (const tab of opened) {
+      const uri = (tab.input as { uri?: unknown } | undefined)?.uri;
+      if (tab.group !== group || !(uri instanceof vscode.Uri) || uri.scheme !== 'file' || !uri.path.toLowerCase().endsWith('.apk')) {
+        continue;
+      }
+      void vscode.window.tabGroups.close(tab);
+      sendFiles(target, [uri]).catch((error: Error) => void vscode.window.showErrorMessage(error.message));
+    }
   }
 
   private async keepFilesLeft(opened: readonly vscode.TabGroup[]): Promise<void> {
@@ -631,6 +661,11 @@ export class DevicePanel {
       );
     }
     await session.client.showExtendedControls(pane);
+  }
+
+  focusedTarget(): AdbTarget | undefined {
+    const session = this.focusedSession();
+    return session && adbTarget(session);
   }
 
   screenshot(): Promise<Buffer> {
@@ -887,6 +922,16 @@ export class DevicePanel {
       case 'edit':
         this.edit(session, message.action).catch((error: Error) =>
           log.appendLine(`[${session.name}] ${message.action} failed: ${error.message}`),
+        );
+        return;
+      case 'drop':
+        sendFiles(adbTarget(session), message.uris.map((uri) => vscode.Uri.parse(uri))).catch(
+          (error: Error) => void vscode.window.showErrorMessage(error.message),
+        );
+        return;
+      case 'dropFiles':
+        sendFileContents(adbTarget(session), message.files).catch(
+          (error: Error) => void vscode.window.showErrorMessage(error.message),
         );
         return;
     }

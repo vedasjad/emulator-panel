@@ -9,6 +9,7 @@ import { Device, DeviceStore } from './deviceStore';
 import { DeviceAction, DevicesViewProvider } from './devicesView';
 import { RunningEmulator, listRunning } from './discovery';
 import { EmulatorClient, Pane } from './emulatorClient';
+import { AdbTarget, sendFiles } from './install';
 import { launchAvd } from './launcher';
 import { pickAndPlayRoute, pickLocation } from './locationPicker';
 import { log } from './log';
@@ -495,6 +496,13 @@ export function activate(context: vscode.ExtensionContext): void {
   register('emulatorPanel.rotateLeft', () => activePanel().rotate(1));
   register('emulatorPanel.rotateRight', () => activePanel().rotate(-1));
   register('emulatorPanel.screenshot', async () => saveScreenshot(await activePanel().screenshot()));
+  register('emulatorPanel.installApk', async (uri?: unknown, uris?: unknown) => {
+    let files = Array.isArray(uris) && uris.length ? (uris as vscode.Uri[]) : uri instanceof vscode.Uri ? [uri] : undefined;
+    files ??= await vscode.window.showOpenDialog({ canSelectMany: true, filters: { 'Android apps': ['apk'] }, openLabel: 'Install' });
+    if (files?.length) {
+      await sendFiles(await installTarget(), files);
+    }
+  });
   register('emulatorPanel.fitColumn', () => activePanel().requestFit());
   for (const [id, pane] of Object.entries(PANE_COMMANDS)) {
     register(id, () => activePanel().showPane(pane));
@@ -593,6 +601,28 @@ function stopSerial(serial: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(adbPath(), ['-s', serial, 'emu', 'kill'], (error) => (error ? reject(error) : resolve()));
   });
+}
+
+async function installTarget(): Promise<AdbTarget> {
+  const focused = DevicePanel.current?.focusedTarget();
+  if (focused) {
+    return focused;
+  }
+  const entries = (await listAdbEntries()).filter((entry) => entry.state === 'device');
+  if (entries.length === 1) {
+    return { name: entries[0].model ?? entries[0].serial, serial: entries[0].serial };
+  }
+  if (!entries.length) {
+    throw new Error('No Android device or emulator is connected.');
+  }
+  const picked = await vscode.window.showQuickPick(
+    entries.map((entry) => ({ label: entry.model ?? entry.serial, description: entry.serial, serial: entry.serial })),
+    { placeHolder: 'Install on which device?' },
+  );
+  if (!picked) {
+    throw new vscode.CancellationError();
+  }
+  return { name: picked.label, serial: picked.serial };
 }
 
 async function withClient<T>(emulator: RunningEmulator, action: (client: EmulatorClient) => Promise<T>): Promise<T> {

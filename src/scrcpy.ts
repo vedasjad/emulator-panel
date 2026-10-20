@@ -50,6 +50,7 @@ export interface MirrorOptions {
   maxSize: number;
   maxFps: number;
   bitRate: number;
+  stayAwake: boolean;
 }
 
 export interface ScrcpyHandlers {
@@ -181,6 +182,7 @@ export class ScrcpyConnection {
       `max_fps=${options.maxFps}`,
       `video_bit_rate=${options.bitRate}`,
       'tunnel_forward=true',
+      `stay_awake=${options.stayAwake}`,
     ]);
     const log = (chunk: Buffer) =>
       chunk

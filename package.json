@@ -1,8 +1,8 @@
 {
   "name": "emulator-panel",
-  "displayName": "Emulator Panel",
+  "displayName": "Emulator Panel: Android Emulator & Phone Mirroring",
   "description": "Run Android emulators and mirror Android phones inside VS Code, keeping the emulator's own extended controls. Manage iOS simulators from the same Device Manager.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "vedasjad",
   "author": { "name": "vedasjad" },
   "license": "MIT",
@@ -20,27 +20,36 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other",
-    "Testing"
+    "Debuggers",
+    "Testing",
+    "Visualization"
   ],
   "keywords": [
     "android",
-    "emulator",
     "android emulator",
+    "emulator",
     "avd",
+    "android studio",
     "running devices",
+    "embedded emulator",
     "device manager",
     "ios",
     "ios simulator",
     "simulator",
     "iphone",
     "adb",
+    "apk",
     "scrcpy",
     "screen mirroring",
+    "screen mirror",
+    "device mirror",
+    "phone",
     "flutter",
     "react native",
+    "expo",
     "mobile",
     "gps",
+    "mock location",
     "location",
     "gpx"
   ],
@@ -106,6 +115,7 @@
       { "command": "emulatorPanel.rotateLeft", "title": "Rotate Left", "category": "Emulator", "icon": "$(debug-step-back)" },
       { "command": "emulatorPanel.rotateRight", "title": "Rotate Right", "category": "Emulator", "icon": "$(debug-step-over)" },
       { "command": "emulatorPanel.screenshot", "title": "Take Screenshot", "category": "Emulator", "icon": "$(device-camera)" },
+      { "command": "emulatorPanel.installApk", "title": "Install APK on Device", "category": "Emulator", "icon": "$(package)" },
       { "command": "emulatorPanel.fitColumn", "title": "Fit Column to Devices", "category": "Emulator" },
       { "command": "emulatorPanel.toggleRunningDevices", "title": "Toggle Running Devices", "category": "Emulator" },
       { "command": "emulatorPanel.showRunningDevices", "title": "Show Running Devices", "category": "Emulator", "icon": "$(layout-sidebar-right-off)" },
@@ -120,6 +130,9 @@
       { "command": "emulatorPanel.stopAll", "title": "Stop All Emulators", "category": "Emulator", "icon": "$(debug-stop)" }
     ],
     "menus": {
+      "explorer/context": [
+        { "command": "emulatorPanel.installApk", "when": "resourceExtname == .apk", "group": "navigation@90" }
+      ],
       "editor/title": [
         { "command": "emulatorPanel.rotateLeft", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "1_device@1" },
         { "command": "emulatorPanel.rotateRight", "when": "activeWebviewPanelId == 'emulatorPanel.device' || activeCustomEditorId == 'emulatorPanel.window'", "group": "1_device@2" },
@@ -256,6 +269,12 @@
           "maximum": 50,
           "order": 12,
           "description": "Video bit rate, in Mbit/s, for mirroring an Android phone. Lower it on slow Wi-Fi connections. Applies the next time a phone is shown."
+        },
+        "emulatorPanel.mirroring.stayAwake": {
+          "type": "boolean",
+          "default": true,
+          "order": 12,
+          "description": "Keep a mirrored Android phone awake while it is plugged in, and restore its own setting when mirroring stops. Applies the next time a phone is shown."
         },
         "emulatorPanel.screenshotFolder": {
           "type": "string",

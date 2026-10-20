@@ -14,6 +14,8 @@ Run Android emulators inside VS Code, the way Android Studio's Running Devices p
 - **Tidy editor layout**: the Running Devices column fits its devices and keeps that width when the sidebar opens or closes or the window is resized; drag the border to change it. Files never open in the Running Devices group, and when it is the only group left a new file opens to its left.
 - **iOS simulators**: run (opens Simulator.app), stop, erase and delete; set a location, play a GPX or KML route at a chosen speed or one of Apple's built-in scenarios; toggle dark mode, open a URL or deep link, take a screenshot and copy the UDID. Points saved in Android Studio are offered for both platforms. Paired iPhones are listed with their connection state.
 - **Screenshots** of any device, saved to a folder and copied to the clipboard.
+- **Install apps**: drag an APK from the Explorer or Finder onto Running Devices, right-click it in the Explorer and choose **Install APK on Device**, or run that command to pick one. Other files dragged from Finder onto a device are copied to its Downloads folder.
+- **Clipboard and keyboard**: copy and paste between your Mac and the device, and right-click the screen for Back.
 
 ## Requirements
 
@@ -60,7 +62,7 @@ Active while Running Devices is focused. Change them in **Preferences: Open Keyb
 
 Phone has no shortcut so that `Cmd+Shift+P` keeps opening the Command Palette; use **Emulator: Phone** instead.
 
-`Cmd+A`, `Cmd+C`, `Cmd+X` and `Cmd+V` select all, copy, cut and paste in the focused device, through the Mac clipboard. They work in Flutter text fields too, and can't be rebound.
+`Cmd+A`, `Cmd+C`, `Cmd+X` and `Cmd+V` select all, copy, cut and paste in the focused device, through the Mac clipboard. They work in Flutter text fields too, and can't be rebound. Right-clicking the screen presses Back.
 
 ## Settings
 
@@ -79,6 +81,7 @@ Phone has no shortcut so that `Cmd+Shift+P` keeps opening the Command Palette; u
 | `emulatorPanel.mirroring.maxSize` | `1920` | Longest side of a mirrored phone screen, in pixels. `0` uses the full resolution. |
 | `emulatorPanel.mirroring.maxFps` | `60` | Maximum frame rate of a mirrored phone screen. |
 | `emulatorPanel.mirroring.bitRate` | `8` | Mirroring bit rate in Mbit/s. Lower it on slow Wi-Fi. |
+| `emulatorPanel.mirroring.stayAwake` | `true` | Keep a mirrored phone awake while it is plugged in; its own setting comes back when mirroring stops. |
 | `emulatorPanel.screenshotFolder` | `""` | Screenshot folder. Defaults to the Desktop; relative paths use the workspace folder. |
 
 ## Privacy
