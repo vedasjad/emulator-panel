@@ -677,8 +677,10 @@ export class DevicePanel {
     const id = DevicePanel.phoneId(phone.serial);
     if (!this.sessions.has(id)) {
       let session: PhoneSession | undefined;
+      let mirrored = false;
       const connection = new ScrcpyConnection(phone.serial, this.environment.serverPath, {
         onSession: (width, height) => {
+          mirrored = true;
           if (session) {
             this.postDevices();
             this.post({ type: 'video', id, kind: 'session', width, height });
@@ -690,9 +692,17 @@ export class DevicePanel {
           }
         },
         onEnd: (error) => {
-          if (session && this.sessions.get(id) === session) {
-            this.status(session, error ? `${phone.name} disconnected: ${error.message}` : `${phone.name} disconnected`);
+          if (!session || this.sessions.get(id) !== session) {
+            return;
           }
+          const message = error ? `${phone.name} disconnected: ${error.message}` : `${phone.name} disconnected`;
+          if (!mirrored) {
+            this.status(session, message);
+            return;
+          }
+          log.appendLine(message);
+          vscode.window.setStatusBarMessage(`${phone.name} disconnected`, 5000);
+          this.removeSession(id);
         },
         onLog: (line) => log.appendLine(`[${phone.name}] ${line}`),
       });
